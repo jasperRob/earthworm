@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use uuid::Uuid;
@@ -38,6 +38,9 @@ enum PopupState {
     NewSession {
         session: Session,
         focused: usize,
+    },
+    KillSession {
+        session: Session,
     },
 }
 
@@ -182,6 +185,22 @@ impl Component for Home {
                 KeyCode::Esc => Ok(Some(Action::CancelInput)),
                 _ => Ok(None),
             },
+            PopupState::KillSession { session } => match key.code {
+                KeyCode::Char(c) => match c {
+                    'y' => {
+                        let session = session.clone();
+                        self.popup_state = PopupState::Closed;
+                        return Ok(Some(Action::RemoveSession(session)));
+                    }
+                    'n' => {
+                        self.popup_state = PopupState::Closed;
+                        return Ok(None);
+                    }
+                    _ => Ok(None),
+                },
+                KeyCode::Esc => Ok(Some(Action::CancelInput)),
+                _ => Ok(None),
+            },
         }
     }
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
@@ -245,12 +264,10 @@ impl Component for Home {
                         match entry {
                             ListEntry::Project(_) => {} // Do nothing
                             ListEntry::ProjectSession(_, s) => {
-                                let session = s.clone();
-                                return Ok(Some(Action::RemoveSession(session)));
+                                self.popup_state = PopupState::KillSession { session: s.clone() };
                             }
                             ListEntry::Session(s) => {
-                                let session = s.clone();
-                                return Ok(Some(Action::RemoveSession(session)));
+                                self.popup_state = PopupState::KillSession { session: s.clone() };
                             }
                             ListEntry::AvailableWorktree(_, _) => {}
                         }
@@ -419,6 +436,32 @@ impl Component for Home {
                     active_area.x + 1 + active_text.len() as u16,
                     active_area.y + 1,
                 ));
+            }
+            PopupState::KillSession { session } => {
+                let centered_area =
+                    area.centered(Constraint::Percentage(20), Constraint::Percentage(20));
+                // clears out any background in the area before rendering the popup
+                frame.render_widget(Clear, centered_area);
+                frame.render_widget(Block::bordered().title("Kill Session?"), centered_area);
+
+                let inner = centered_area.inner(Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                });
+                let [_, text_area, _] = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(5),
+                    Constraint::Fill(1),
+                ])
+                .areas(inner);
+                let text = Text::from(vec![
+                    Line::from(format!("Kill \"{}\"?", session.name)).centered(),
+                    Line::from(""),
+                    Line::from(""),
+                    Line::from(""),
+                    Line::from("y / n").centered(),
+                ]);
+                frame.render_widget(Paragraph::new(text), text_area);
             }
         }
 
