@@ -18,6 +18,9 @@ pub struct Home {
     list_entries: Vec<ListEntry>,
     list_state: ListState,
     popup_state: PopupState,
+    search: Option<String>,
+    search_matches: Vec<usize>,
+    search_cursor: usize,
 }
 
 enum ListEntry {
@@ -50,6 +53,9 @@ impl Home {
             list_entries: Vec::default(),
             list_state: ListState::default(),
             popup_state: PopupState::Closed,
+            search: None,
+            search_matches: Vec::default(),
+            search_cursor: usize::default(),
         }
     }
 
@@ -95,11 +101,76 @@ impl Home {
 
 impl Component for Home {
     fn is_capturing_input(&self) -> bool {
-        return !matches!(self.popup_state, PopupState::Closed);
+        return !matches!(self.popup_state, PopupState::Closed) || self.search.is_some();
     }
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         match &mut self.popup_state {
-            PopupState::Closed => Ok(None), // config keybindings handle this
+            PopupState::Closed => match key.code {
+                KeyCode::Esc => {
+                    if self.search.is_some() {
+                        self.search = None;
+                    }
+                    Ok(None)
+                }
+                KeyCode::Char(c) => {
+                    if self.search.is_some() {
+                        if let Some(search) = &mut self.search {
+                            search.push(c);
+                        }
+                        self.search_matches = self
+                            .list_entries
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, item)| {
+                                let text = match item {
+                                    ListEntry::Project(p) => p.name.as_str(),
+                                    ListEntry::ProjectSession(_, s) => s.name.as_str(),
+                                    ListEntry::AvailableWorktree(_, w) => w.path.as_str(),
+                                    ListEntry::Session(s) => s.name.as_str(),
+                                };
+                                let query = self.search.clone().unwrap_or_default();
+                                if text.contains(&query) {
+                                    Some(index)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        self.search_cursor = 0;
+                        if let Some(&first_match) = self.search_matches.first() {
+                            self.list_state.select(Some(first_match))
+                        }
+                    } else {
+                        match c {
+                            '/' => {
+                                self.search = Some(String::new());
+                            }
+                            'n' => {
+                                if !self.search_matches.is_empty() {
+                                    self.search_cursor =
+                                        (self.search_cursor + 1) % self.search_matches.len();
+                                    self.list_state
+                                        .select(Some(self.search_matches[self.search_cursor]));
+                                }
+                            }
+                            'N' => {
+                                if !self.search_matches.is_empty() {
+                                    self.search_cursor = self
+                                        .search_cursor
+                                        .checked_sub(1)
+                                        .unwrap_or(self.search_matches.len() - 1);
+                                    self.list_state
+                                        .select(Some(self.search_matches[self.search_cursor]));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
             PopupState::NewProject { project, focused } => match key.code {
                 KeyCode::Tab => {
                     *focused = (*focused + 1) % 2;
