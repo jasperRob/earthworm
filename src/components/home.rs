@@ -328,132 +328,35 @@ impl Component for Home {
         match &self.popup_state {
             PopupState::Closed => {}
             PopupState::NewProject { project, focused } => {
-                let centered_area =
-                    area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
-                // clears out any background in the area before rendering the popup
-                frame.render_widget(Clear, centered_area);
-                frame.render_widget(Block::bordered().title("New Project"), centered_area);
+                let fields = &[
+                    ("Name", project.name.as_str(), *focused == 0),
+                    ("Path", project.path.as_str(), *focused == 1),
+                ];
 
-                let [name_area, path_area] =
-                    Layout::vertical([Constraint::Length(3), Constraint::Length(3)]).areas(
-                        centered_area.inner(Margin {
-                            horizontal: 1,
-                            vertical: 1,
-                        }),
-                    );
-                let field_style = |i: usize| {
-                    if *focused == i {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    }
-                };
-
-                frame.render_widget(
-                    Paragraph::new(project.name.as_str())
-                        .block(Block::bordered().title("Name").border_style(field_style(0))),
-                    name_area,
-                );
-                frame.render_widget(
-                    Paragraph::new(project.path.as_str())
-                        .block(Block::bordered().title("Path").border_style(field_style(1))),
-                    path_area,
-                );
-
-                let mut active_area = name_area;
-                let mut active_text = project.name.as_str();
-                match focused {
-                    0 => {}
-                    1 => {
-                        active_area = path_area;
-                        active_text = project.path.as_str();
-                    }
-                    _ => {}
-                }
-                frame.set_cursor_position((
-                    active_area.x + 1 + active_text.len() as u16,
-                    active_area.y + 1,
-                ));
+                open_popup(frame, area, "New Project", fields);
             }
             PopupState::NewSession { session, focused } => {
-                let centered_area =
-                    area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
-                // clears out any background in the area before rendering the popup
-                frame.render_widget(Clear, centered_area);
-                frame.render_widget(Block::bordered().title("New Session"), centered_area);
+                let fields = &[
+                    ("Name", session.name.as_str(), *focused == 0),
+                    ("Path", session.path.as_str(), *focused == 1),
+                    ("Worktree", session.worktree.as_str(), *focused == 2),
+                ];
 
-                let [name_area, path_area, worktree_area] = Layout::vertical([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                ])
-                .areas(centered_area.inner(Margin {
-                    horizontal: 1,
-                    vertical: 1,
-                }));
-                let field_style = |i: usize| {
-                    if *focused == i {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    }
-                };
-
-                frame.render_widget(
-                    Paragraph::new(session.name.as_str())
-                        .block(Block::bordered().title("Name").border_style(field_style(0))),
-                    name_area,
-                );
-                frame.render_widget(
-                    Paragraph::new(session.path.as_str())
-                        .block(Block::bordered().title("Path").border_style(field_style(1))),
-                    path_area,
-                );
-                frame.render_widget(
-                    Paragraph::new(session.worktree.as_str()).block(
-                        Block::bordered()
-                            .title("Worktree")
-                            .border_style(field_style(2)),
-                    ),
-                    worktree_area,
-                );
-
-                let mut active_area = name_area;
-                let mut active_text = session.name.as_str();
-                match focused {
-                    0 => {}
-                    1 => {
-                        active_area = path_area;
-                        active_text = session.path.as_str();
-                    }
-                    2 => {
-                        active_area = worktree_area;
-                        active_text = session.worktree.as_str();
-                    }
-                    _ => {}
-                }
-                frame.set_cursor_position((
-                    active_area.x + 1 + active_text.len() as u16,
-                    active_area.y + 1,
-                ));
+                open_popup(frame, area, "New Session", fields);
             }
             PopupState::KillSession { session } => {
-                let centered_area =
-                    area.centered(Constraint::Percentage(20), Constraint::Percentage(20));
-                // clears out any background in the area before rendering the popup
-                frame.render_widget(Clear, centered_area);
-                frame.render_widget(Block::bordered().title("Kill Session?"), centered_area);
-
-                let inner = centered_area.inner(Margin {
-                    horizontal: 1,
-                    vertical: 1,
-                });
+                let text_body = format!("Kill \"{}\"?", session.name);
+                let popup = area.centered(
+                    Constraint::Length(text_body.len() as u16 * 2),
+                    Constraint::Length(11),
+                );
+                popup_ouline(frame, popup, "Kill Session?");
                 let [_, text_area, _] = Layout::vertical([
                     Constraint::Fill(1),
                     Constraint::Length(5),
                     Constraint::Fill(1),
                 ])
-                .areas(inner);
+                .areas(popup);
                 let text = Text::from(vec![
                     Line::from(format!("Kill \"{}\"?", session.name)).centered(),
                     Line::from(""),
@@ -467,4 +370,69 @@ impl Component for Home {
 
         Ok(())
     }
+}
+
+fn open_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str, &str, bool)]) {
+    let height = (2 * fields.len() - 1) as u16 + 4;
+    let popup = area.centered(
+        Constraint::Percentage(40),
+        Constraint::Length(height as u16),
+    );
+    // clears out any background in the area before rendering the popup
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Block::bordered().title(title), popup);
+    let inner = popup.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+
+    let mut constraints: Vec<Constraint> = vec![Constraint::Fill(1)];
+    for _ in fields {
+        constraints.push(Constraint::Length(1));
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.pop();
+    constraints.push(Constraint::Fill(1));
+
+    let areas = Layout::vertical(constraints).split(inner);
+
+    let mut active_area = Rect::default();
+    let mut active_label = String::default();
+    let mut active_text = String::default();
+    for (i, (label, value, is_focused)) in fields.iter().enumerate() {
+        let widget = labeled_input(label, value, *is_focused);
+        let area = areas[(i * 2) + 1];
+        frame.render_widget(widget, area);
+        if *is_focused {
+            active_area = area;
+            active_label = label.to_string();
+            active_text = value.to_string();
+        }
+    }
+
+    frame.set_cursor_position((
+        active_area.x + 1 + active_label.len() as u16 + 2 + active_text.len() as u16,
+        active_area.y,
+    ));
+}
+
+fn labeled_input<'a>(label: &'a str, value: &'a str, is_focused: bool) -> Paragraph<'a> {
+    let label_style = if is_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    Paragraph::new(Line::from(vec![
+        Span::styled(format!(" {}: ", label), label_style),
+        Span::raw(value),
+    ]))
+}
+
+fn popup_ouline(frame: &mut Frame, popup: Rect, title: &str) -> Rect {
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Block::bordered().title(title), popup);
+    popup.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    })
 }
