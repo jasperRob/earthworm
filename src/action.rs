@@ -17,11 +17,18 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
+    // Commands
     CmdSelectNext,
     CmdSelectPrev,
     CmdManageProjects,
     CmdAddSession,
     CmdDeleteItem,
+    CmdJumpTop,
+    CmdJumpBottom,
+    CmdStartSearch,
+    CmdSearchNext,
+    CmdSearchPrev,
+    // Internal
     SubmitInput(String),
     CancelInput,
     CmdAttach,

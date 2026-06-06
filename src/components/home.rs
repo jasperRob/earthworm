@@ -18,6 +18,10 @@ pub struct Home {
     list_entries: Vec<ListEntry>,
     list_state: ListState,
     popup_state: PopupState,
+    search_is_capturing: bool,
+    search: Option<String>,
+    search_matches: Vec<usize>,
+    search_cursor: usize,
 }
 
 enum ListEntry {
@@ -50,6 +54,10 @@ impl Home {
             list_entries: Vec::default(),
             list_state: ListState::default(),
             popup_state: PopupState::Closed,
+            search_is_capturing: false,
+            search: None,
+            search_matches: Vec::default(),
+            search_cursor: usize::default(),
         }
     }
 
@@ -98,11 +106,58 @@ impl Home {
 
 impl Component for Home {
     fn is_capturing_input(&self) -> bool {
-        return !matches!(self.popup_state, PopupState::Closed);
+        return !matches!(self.popup_state, PopupState::Closed) || self.search_is_capturing;
     }
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         match &mut self.popup_state {
-            PopupState::Closed => Ok(None), // config keybindings handle this
+            PopupState::Closed => match key.code {
+                KeyCode::Enter => {
+                    if self.search_is_capturing {
+                        self.search_is_capturing = false;
+                    }
+                    Ok(None)
+                }
+                KeyCode::Esc => {
+                    if self.search_is_capturing {
+                        self.search_is_capturing = false;
+                        self.search = None;
+                    }
+                    Ok(None)
+                }
+                KeyCode::Char(c) => {
+                    if self.search_is_capturing {
+                        if let Some(search) = &mut self.search {
+                            search.push(c);
+                        }
+                        self.search_matches = self
+                            .list_entries
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, item)| {
+                                let text = match item {
+                                    ListEntry::Project(p) => p.name.as_str(),
+                                    ListEntry::ProjectSession(_, s) => s.name.as_str(),
+                                    ListEntry::AvailableWorktree(_, w) => w.path.as_str(),
+                                    ListEntry::Session(s) => s.name.as_str(),
+                                };
+                                let query = self.search.clone().unwrap_or_default();
+                                if text.contains(&query) {
+                                    Some(index)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        self.search_cursor = 0;
+                        if let Some(&first_match) = self.search_matches.first() {
+                            self.list_state.select(Some(first_match))
+                        }
+                    }
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
             PopupState::NewProject { project, focused } => match key.code {
                 KeyCode::Tab => {
                     *focused = (*focused + 1) % 2;
@@ -213,6 +268,37 @@ impl Component for Home {
             }
             Action::CmdSelectNext => self.list_state.select_next(),
             Action::CmdSelectPrev => self.list_state.select_previous(),
+            Action::CmdJumpTop => {
+                if !self.list_entries.is_empty() {
+                    self.list_state.select(Some(0));
+                }
+            }
+            Action::CmdJumpBottom => {
+                if !self.list_entries.is_empty() {
+                    self.list_state.select(Some(self.list_entries.len() - 1));
+                }
+            }
+            Action::CmdStartSearch => {
+                self.search = Some(String::new());
+                self.search_is_capturing = true;
+            }
+            Action::CmdSearchNext => {
+                if !self.search_matches.is_empty() {
+                    self.search_cursor = (self.search_cursor + 1) % self.search_matches.len();
+                    self.list_state
+                        .select(Some(self.search_matches[self.search_cursor]));
+                }
+            }
+            Action::CmdSearchPrev => {
+                if !self.search_matches.is_empty() {
+                    self.search_cursor = self
+                        .search_cursor
+                        .checked_sub(1)
+                        .unwrap_or(self.search_matches.len() - 1);
+                    self.list_state
+                        .select(Some(self.search_matches[self.search_cursor]));
+                }
+            }
             Action::CmdManageProjects => {
                 let project_id = Uuid::new_v4();
                 self.popup_state = PopupState::NewProject {
@@ -306,24 +392,25 @@ impl Component for Home {
             .iter()
             .map(|entry| match entry {
                 ListEntry::Project(p) => ListItem::new(Line::from(Span::styled(
-                    format!("- {}", p.name.clone()),
+                    format!(" - {}", p.name.clone()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ))),
                 ListEntry::ProjectSession(_, s) => ListItem::new(Line::from(vec![
-                    Span::raw("    "),
+                    Span::raw("     "),
                     Span::raw(s.name.clone()),
                 ])),
                 ListEntry::AvailableWorktree(_, worktree) => ListItem::new(Line::from(vec![
-                    Span::raw("    "),
+                    Span::raw("     "),
                     Span::raw(worktree.path.clone()),
                 ])),
-                ListEntry::Session(s) => ListItem::new(s.name.clone()),
+                ListEntry::Session(s) => {
+                    ListItem::new(Line::from(vec![Span::raw(" "), Span::raw(s.name.clone())]))
+                }
             })
             .collect();
 
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title("Sessions"))
-            .highlight_symbol("> ")
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_stateful_widget(list, area, &mut self.list_state);
