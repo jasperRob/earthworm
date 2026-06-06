@@ -7,10 +7,15 @@
       "<Ctrl-z>": "Suspend", // Suspend the application
       "<j>": "CmdSelectNext",
       "<k>": "CmdSelectPrev",
-      "<p>": "CmdManageProjects",
-      "<n>": "CmdAddSession",
-      "<d>": "CmdDeleteItem",
-      "<a>": "CmdAttach",
+      "<g><g>": "CmdJumpTop",
+      "<Shift-g>": "CmdJumpBottom",
+      "</>": "CmdStartSearch",
+      "<n>": "CmdSearchNext",
+      "<Shift-n>": "CmdSearchPrev",
+      "<Space><p>": "CmdManageProjects",
+      "<Space><s>": "CmdAddSession",
+      "<Space><d>": "CmdDeleteItem",
+      "<Space><a>": "CmdAttach",
     },
   }
 }

@@ -140,6 +140,7 @@ impl App {
             Some(action) => {
                 info!("Got action: {action:?}");
                 action_tx.send(action.clone())?;
+                self.last_tick_key_events.drain(..);
             }
             _ => {
                 // If the key was not handled as a single key action,
@@ -150,6 +151,15 @@ impl App {
                 if let Some(action) = keymap.get(&self.last_tick_key_events) {
                     info!("Got action: {action:?}");
                     action_tx.send(action.clone())?;
+                    self.last_tick_key_events.drain(..);
+                } else {
+                    let is_prefix = keymap.keys().any(|k| {
+                        k.starts_with(&self.last_tick_key_events)
+                            && k.len() > self.last_tick_key_events.len()
+                    });
+                    if !is_prefix {
+                        self.last_tick_key_events.drain(..);
+                    }
                 }
             }
         }
@@ -163,7 +173,7 @@ impl App {
             }
             match action {
                 Action::Tick => {
-                    self.last_tick_key_events.drain(..);
+                    // self.last_tick_key_events.drain(..);
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
