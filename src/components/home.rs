@@ -56,7 +56,10 @@ impl Home {
     fn rebuild_list(&mut self, projects: HashMap<Uuid, Project>, sessions: HashMap<Uuid, Session>) {
         let mut list_entries: Vec<ListEntry> = Vec::new();
 
-        for project in projects.values() {
+        let mut sorted_projects: Vec<&Project> = projects.values().collect();
+        sorted_projects.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for project in sorted_projects {
             list_entries.push(ListEntry::Project(project.clone()));
             for session_id in &project.sessions {
                 if let Some(session) = sessions.get(session_id) {
@@ -75,12 +78,12 @@ impl Home {
             }
         }
 
-        list_entries.extend(
-            sessions
-                .values()
-                .filter(|s| s.project_id.is_none())
-                .map(|s| ListEntry::Session(s.clone())),
-        );
+        let mut orphaned: Vec<&Session> = sessions
+            .values()
+            .filter(|s| s.project_id.is_none())
+            .collect();
+        orphaned.sort_by(|a, b| a.name.cmp(&b.name));
+        list_entries.extend(orphaned.into_iter().map(|s| ListEntry::Session(s.clone())));
         self.list_entries = list_entries;
 
         if self.list_entries.is_empty() {
