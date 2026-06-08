@@ -89,35 +89,3 @@ pub fn kill_tmux_session(
     }
     Ok(())
 }
-
-pub fn create_worktree(repo_path: &str, worktree: &str) -> color_eyre::Result<String> {
-    // TODO: do we want the path to be in the same root dir? or in a .earthworm dir?
-    let worktree_path = format!("{}-{}", repo_path.trim_end_matches('/'), worktree);
-
-    let branch_exists = std::process::Command::new("git")
-        .args(["-C", repo_path, "rev-parse", "--verify", worktree])
-        .status()?
-        .success();
-
-    let status = if branch_exists {
-        std::process::Command::new("git")
-            .args(["-C", repo_path, "worktree", "add", &worktree_path, worktree])
-            .status()?
-    } else {
-        std::process::Command::new("git")
-            .args([
-                "-C",
-                repo_path,
-                "worktree",
-                "add",
-                "-b",
-                worktree,
-                &worktree_path,
-            ])
-            .status()?
-    };
-    if !status.success() {
-        return Err(color_eyre::eyre::eyre!("git worktree add failed"));
-    }
-    Ok(worktree_path)
-}
