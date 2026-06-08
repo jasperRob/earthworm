@@ -46,6 +46,10 @@ enum PopupState {
     KillSession {
         session: Session,
     },
+    RemoveWorktree {
+        project: Project,
+        worktree: Worktree,
+    },
 }
 
 impl Home {
@@ -259,6 +263,23 @@ impl Component for Home {
                 KeyCode::Esc => Ok(Some(Action::CancelInput)),
                 _ => Ok(None),
             },
+            PopupState::RemoveWorktree { project, worktree } => match key.code {
+                KeyCode::Char(c) => match c {
+                    'y' => {
+                        let project = project.clone();
+                        let worktree = worktree.clone();
+                        self.popup_state = PopupState::Closed;
+                        return Ok(Some(Action::RemoveWorktree(project, worktree)));
+                    }
+                    'n' => {
+                        self.popup_state = PopupState::Closed;
+                        return Ok(None);
+                    }
+                    _ => Ok(None),
+                },
+                KeyCode::Esc => Ok(Some(Action::CancelInput)),
+                _ => Ok(None),
+            },
         }
     }
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
@@ -358,7 +379,12 @@ impl Component for Home {
                             ListEntry::Session(s) => {
                                 self.popup_state = PopupState::KillSession { session: s.clone() };
                             }
-                            ListEntry::AvailableWorktree(_, _) => {}
+                            ListEntry::AvailableWorktree(p, wt) => {
+                                self.popup_state = PopupState::RemoveWorktree {
+                                    project: p.clone(),
+                                    worktree: wt.clone(),
+                                };
+                            }
                         }
                     }
                 }
@@ -422,8 +448,7 @@ impl Component for Home {
                     ("Name", project.name.as_str(), *focused == 0),
                     ("Path", project.path.as_str(), *focused == 1),
                 ];
-
-                open_popup(frame, area, "New Project", fields);
+                open_input_popup(frame, area, "New Project", fields);
             }
             PopupState::NewSession { session, focused } => {
                 let fields = &[
@@ -431,30 +456,15 @@ impl Component for Home {
                     ("Path", session.path.as_str(), *focused == 1),
                     ("Worktree", session.worktree.as_str(), *focused == 2),
                 ];
-
-                open_popup(frame, area, "New Session", fields);
+                open_input_popup(frame, area, "New Session", fields);
             }
             PopupState::KillSession { session } => {
-                let text_body = format!("Kill \"{}\"?", session.name);
-                let popup = area.centered(
-                    Constraint::Length(text_body.len() as u16 * 2),
-                    Constraint::Length(11),
-                );
-                popup_ouline(frame, popup, "Kill Session?");
-                let [_, text_area, _] = Layout::vertical([
-                    Constraint::Fill(1),
-                    Constraint::Length(5),
-                    Constraint::Fill(1),
-                ])
-                .areas(popup);
-                let text = Text::from(vec![
-                    Line::from(format!("Kill \"{}\"?", session.name)).centered(),
-                    Line::from(""),
-                    Line::from(""),
-                    Line::from(""),
-                    Line::from("y / n").centered(),
-                ]);
-                frame.render_widget(Paragraph::new(text), text_area);
+                let body = format!("Kill \"{}\"?", session.name);
+                open_confirmation_popup(frame, area, "Kill Session", &body);
+            }
+            PopupState::RemoveWorktree { project, worktree } => {
+                let body = format!("Remove \"{}\"?", worktree.name);
+                open_confirmation_popup(frame, area, "Remove Worktree", &body);
             }
         }
 
@@ -462,7 +472,7 @@ impl Component for Home {
     }
 }
 
-fn open_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str, &str, bool)]) {
+fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str, &str, bool)]) {
     let height = (2 * fields.len() - 1) as u16 + 4;
     let popup = area.centered(
         Constraint::Percentage(40),
@@ -518,11 +528,29 @@ fn labeled_input<'a>(label: &'a str, value: &'a str, is_focused: bool) -> Paragr
     ]))
 }
 
-fn popup_ouline(frame: &mut Frame, popup: Rect, title: &str) -> Rect {
+fn open_confirmation_popup(frame: &mut Frame, area: Rect, title: &str, body: &str) {
+    let popup = area.centered(
+        Constraint::Length(body.len() as u16 * 2),
+        Constraint::Length(11),
+    );
     frame.render_widget(Clear, popup);
     frame.render_widget(Block::bordered().title(title), popup);
-    popup.inner(Margin {
+    let inner = popup.inner(Margin {
         horizontal: 1,
         vertical: 1,
-    })
+    });
+    let [_, text_area, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(5),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+    let text = Text::from(vec![
+        Line::from(body).centered(),
+        Line::from(""),
+        Line::from(""),
+        Line::from(""),
+        Line::from("y / n").centered(),
+    ]);
+    frame.render_widget(Paragraph::new(text), text_area);
 }

@@ -11,13 +11,13 @@ use crate::{
     action::Action,
     components::{Component, fps::FpsCounter, home::Home, notification::Notification},
     config::Config,
-    git::fetch_worktrees,
+    git::{create_worktree, fetch_worktrees, remove_worktree},
     project::Project,
     session::Session,
     state::{AppState, load_state, save_state},
     tmux::{
-        attach_tmux_session, create_worktree, fetch_tmux_sessions, kill_tmux_session,
-        new_tmux_session, tmux_session_name,
+        attach_tmux_session, fetch_tmux_sessions, kill_tmux_session, new_tmux_session,
+        tmux_session_name,
     },
     tui::{Event, Tui},
 };
@@ -240,6 +240,19 @@ impl App {
                     if let Some(project_id) = session.project_id {
                         if let Some(project) = self.projects.get_mut(&project_id) {
                             project.sessions.retain(|id| *id != session.id);
+                        }
+                    }
+                    self.fetch_and_map_tmux_sessions()?;
+                    self.persist_state();
+                    self.broadcast_state()?;
+                    self.action_tx.send(Action::ClearScreen)?;
+                }
+                Action::RemoveWorktree(ref project, ref worktree) => {
+                    match remove_worktree(&project.path, &worktree.path) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            self.action_tx.send(Action::Error(e.to_string()))?;
+                            return Ok(());
                         }
                     }
                     self.fetch_and_map_tmux_sessions()?;

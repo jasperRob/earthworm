@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 use uuid::Uuid;
 
-use crate::{project::Project, session::Session};
+use crate::{git::Worktree, project::Project, session::Session};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
@@ -36,5 +36,6 @@ pub enum Action {
     SubmitSession(Session),
     AttachSession(Session),
     RemoveSession(Session),
+    RemoveWorktree(Project, Worktree),
     StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>),
 }
