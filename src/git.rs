@@ -1,10 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Worktree {
-    pub path: String,
-    pub name: String,
-}
+use crate::worktree::Worktree;
 
 pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
     let output = std::process::Command::new("git")
@@ -22,8 +16,8 @@ pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
         } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
             if let Some(path) = current_path.take() {
                 worktrees.push(Worktree {
-                    path,
                     name: branch.to_string(),
+                    path,
                 })
             }
         }
@@ -32,9 +26,12 @@ pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
     Ok(worktrees)
 }
 
-pub fn create_worktree(repo_path: &str, worktree_name: &str) -> color_eyre::Result<String> {
-    // TODO: do we want the path to be in the same root dir? or in a .earthworm dir?
-    let worktree_path = format!("{}-{}", repo_path.trim_end_matches('/'), worktree_name);
+pub fn create_worktree(
+    repo_path: &str,
+    worktree_name: &str,
+    worktree_path: &str,
+) -> color_eyre::Result<()> {
+    // let worktree_path = format!("{}-{}", repo_path.trim_end_matches('/'), worktree_name);
 
     let branch_exists = std::process::Command::new("git")
         .args(["-C", repo_path, "rev-parse", "--verify", worktree_name])
@@ -68,7 +65,7 @@ pub fn create_worktree(repo_path: &str, worktree_name: &str) -> color_eyre::Resu
     if !status.success() {
         return Err(color_eyre::eyre::eyre!("git worktree add failed"));
     }
-    Ok(worktree_path)
+    Ok(())
 }
 
 pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> color_eyre::Result<()> {

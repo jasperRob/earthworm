@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 use uuid::Uuid;
 
-use crate::{git::Worktree, project::Project, session::Session};
+use crate::{project::Project, session::Session, worktree::Worktree};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
@@ -20,7 +20,7 @@ pub enum Action {
     // Commands
     CmdSelectNext,
     CmdSelectPrev,
-    CmdManageProjects,
+    CmdAddProject,
     CmdAddSession,
     CmdDeleteItem,
     CmdJumpTop,
@@ -28,14 +28,20 @@ pub enum Action {
     CmdStartSearch,
     CmdSearchNext,
     CmdSearchPrev,
-    // Internal
-    SubmitInput(String),
-    CancelInput,
     CmdAttach,
+    CmdEdit,
+    // Input
+    CancelInput, // TODO: This should be removed in favour of FormPopup cancellation
+    // Project
     SubmitProject(Project),
+    UpdateProject(Project),
+    // Session
     SubmitSession(Session),
+    UpdateSession(Session),
     AttachSession(Session),
     RemoveSession(Session),
+    // Worktrees
     RemoveWorktree(Project, Worktree),
+    // State
     StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>),
 }

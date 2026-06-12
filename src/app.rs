@@ -191,38 +191,58 @@ impl App {
                     self.broadcast_state()?;
                 }
                 Action::SubmitSession(ref session) => {
-                    let path: Option<String> =
-                        if !session.worktree.is_empty() && !session.path.is_empty() {
-                            match create_worktree(&session.path, &session.worktree) {
-                                Ok(p) => Some(p),
-                                Err(e) => {
-                                    self.action_tx.send(Action::Error(e.to_string()))?;
-                                    return Ok(());
+                    // TODO: Make this better. Too nested
+                    let mut project: Option<&Project> = None;
+                    if let Some(project_id) = session.project_id {
+                        project = self.projects.get(&project_id);
+
+                        match project {
+                            None => self.dispatch_error("project is None"),
+                            Some(p) => {
+                                let session_path = session.path.clone();
+                                if let Some(path) = session_path {
+                                    let session_worktree = session.worktree.clone();
+                                    if let Some(worktree) = session_worktree {
+                                        if !p.worktrees.iter().any(|wt| wt.name == worktree.name) {
+                                            if let Err(e) =
+                                                create_worktree(&p.path, &worktree.name, &path)
+                                            {
+                                                self.dispatch_error(e);
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        } else if !session.path.is_empty() {
-                            Some(session.path.clone())
-                        } else {
-                            None
-                        };
-                    if let Err(e) = new_tmux_session(session, &self.projects, path.as_deref()) {
-                        self.action_tx.send(Action::Error(e.to_string()))?;
-                    } else {
-                        self.sessions.insert(session.id, session.clone());
-                        if let Some(project_id) = session.project_id {
-                            if let Some(project) = self.projects.get_mut(&project_id) {
-                                project.sessions.push(session.id);
-                            }
                         }
-                        self.fetch_and_map_tmux_sessions()?;
-                        self.persist_state();
-                        self.broadcast_state()?;
-                        self.action_tx.send(Action::ClearScreen)?;
                     }
+
+                    if let Err(e) = new_tmux_session(&session, project) {
+                        self.dispatch_error(e);
+                        return Ok(());
+                    }
+
+                    self.sessions.insert(session.id, session.clone());
+                    if let Some(project_id) = session.project_id {
+                        if let Some(project) = self.projects.get_mut(&project_id) {
+                            project.sessions.push(session.id);
+                        }
+                    }
+                    self.fetch_and_map_tmux_sessions()?;
+                    self.persist_state();
+                    self.broadcast_state()?;
+                    self.action_tx.send(Action::ClearScreen)?;
                 }
                 Action::AttachSession(ref session) => {
                     tui.exit()?;
-                    if let Err(e) = attach_tmux_session(session, &self.projects) {
+                    let mut project: Option<&Project> = None;
+                    if let Some(project_id) = session.project_id {
+                        project = self.projects.get(&project_id);
+                        match project {
+                            None => self.dispatch_error("project is None"),
+                            _ => {}
+                        }
+                    }
+                    if let Err(e) = attach_tmux_session(session, project) {
                         self.action_tx.send(Action::Error(e.to_string()))?;
                     } else {
                         self.fetch_and_map_tmux_sessions()?;
@@ -233,7 +253,15 @@ impl App {
                     tui.enter()?;
                 }
                 Action::RemoveSession(ref session) => {
-                    if let Err(e) = kill_tmux_session(session, &self.projects) {
+                    let mut project: Option<&Project> = None;
+                    if let Some(project_id) = session.project_id {
+                        project = self.projects.get(&project_id);
+                        match project {
+                            None => self.dispatch_error("project is None"),
+                            _ => {}
+                        }
+                    }
+                    if let Err(e) = kill_tmux_session(session, project) {
                         self.action_tx.send(Action::Error(e.to_string()))?;
                     }
                     self.sessions.remove(&session.id);
@@ -249,11 +277,11 @@ impl App {
                 }
                 Action::RemoveWorktree(ref project, ref worktree) => {
                     match remove_worktree(&project.path, &worktree.path) {
-                        Ok(_) => {}
                         Err(e) => {
                             self.action_tx.send(Action::Error(e.to_string()))?;
                             return Ok(());
                         }
+                        _ => {}
                     }
                     self.fetch_and_map_tmux_sessions()?;
                     self.persist_state();
@@ -296,17 +324,31 @@ impl App {
         let session_names_in_state: HashSet<String> = self
             .sessions
             .values()
-            .filter_map(|s| tmux_session_name(s, &self.projects).ok())
+            .filter_map(|s| match s.project_id {
+                None => Some(tmux_session_name(s, None)),
+                Some(project_id) => match self.projects.get(&project_id) {
+                    None => {
+                        self.dispatch_error("project is None");
+                        None
+                    }
+                    Some(project) => Some(tmux_session_name(s, Some(project))),
+                },
+            })
             .collect();
 
-        let projects = &self.projects;
         self.sessions.retain(|_id, session| {
             if session.project_id.is_none() {
                 return true;
             }
-            tmux_session_name(session, projects)
-                .map(|name| active_session_names.contains(&name))
-                .unwrap_or(false)
+            match session.project_id {
+                None => true,
+                Some(project_id) => match self.projects.get(&project_id) {
+                    None => false, // TODO: Error
+                    Some(project) => {
+                        active_session_names.contains(&tmux_session_name(session, Some(project)))
+                    }
+                },
+            }
         });
 
         for name in &active_session_names {
@@ -318,8 +360,8 @@ impl App {
                         id: uuid,
                         project_id: None,
                         name: name.clone(),
-                        path: String::new(),
-                        worktree: String::new(),
+                        path: None,
+                        worktree: None,
                     },
                 );
             }
@@ -330,6 +372,7 @@ impl App {
                 project.worktrees = fetch_worktrees(&project.path).unwrap_or_default();
             }
         }
+
         Ok(())
     }
 
@@ -361,5 +404,9 @@ impl App {
                 let _ = self.action_tx.send(Action::Error(e.to_string()));
             }
         }
+    }
+
+    fn dispatch_error(&self, e: impl std::fmt::Display) {
+        self.action_tx.send(Action::Error(e.to_string()));
     }
 }
