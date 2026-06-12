@@ -16,6 +16,7 @@ mod session;
 mod state;
 mod tmux;
 mod tui;
+mod worktree;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {

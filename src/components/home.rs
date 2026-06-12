@@ -1,7 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Component;
-use crate::{action::Action, git::Worktree, project::Project, session::Session};
+use crate::{
+    action::Action,
+    components::form_popup::{FormEvent, FormPopup},
+    project::Project,
+    session::Session,
+    worktree::Worktree,
+};
 use color_eyre::eyre::Ok;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -13,6 +19,86 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+enum ListEntry {
+    Project(Project),
+    ProjectSession(Project, Session),
+    AvailableWorktree(Project, Worktree),
+    Session(Session),
+}
+
+enum ProjectField {
+    Name = 0,
+    Path = 1,
+}
+
+impl ProjectField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Path => "Path",
+        }
+    }
+}
+
+enum NewSessionField {
+    Name = 0,
+    WorktreeName = 1,
+    Path = 2,
+}
+
+impl NewSessionField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::WorktreeName => "Worktree Name",
+            Self::Path => "Path",
+        }
+    }
+}
+
+enum EditSessionField {
+    Name = 0,
+    Path = 1,
+}
+
+impl EditSessionField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Path => "Path",
+        }
+    }
+}
+
+#[derive(Default)]
+enum PopupState {
+    #[default]
+    Closed,
+    NewProject {
+        form: FormPopup,
+    },
+    EditProject {
+        form: FormPopup,
+        project: Project,
+    },
+    NewSession {
+        form: FormPopup,
+        project_id: Option<Uuid>,
+        base_path: String,
+    },
+    EditSession {
+        form: FormPopup,
+        session: Session,
+    },
+    KillSession {
+        session: Session,
+    },
+    RemoveWorktree {
+        project: Project,
+        worktree: Worktree,
+    },
+}
+
 #[derive(Default)]
 pub struct Home {
     list_entries: Vec<ListEntry>,
@@ -22,34 +108,6 @@ pub struct Home {
     search: Option<String>,
     search_matches: Vec<usize>,
     search_cursor: usize,
-}
-
-enum ListEntry {
-    Project(Project),
-    ProjectSession(Project, Session),
-    AvailableWorktree(Project, Worktree),
-    Session(Session),
-}
-
-#[derive(Default)]
-enum PopupState {
-    #[default]
-    Closed,
-    NewProject {
-        project: Project,
-        focused: usize,
-    },
-    NewSession {
-        session: Session,
-        focused: usize,
-    },
-    KillSession {
-        session: Session,
-    },
-    RemoveWorktree {
-        project: Project,
-        worktree: Worktree,
-    },
 }
 
 impl Home {
@@ -78,8 +136,13 @@ impl Home {
                     list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
                 }
             }
-            let active_paths: HashSet<&str> = sessions.values().map(|s| s.path.as_str()).collect();
+            // Find all paths which are currently used by sessions
+            let active_paths: HashSet<&str> = sessions
+                .values()
+                .filter_map(|s| s.path.as_deref())
+                .collect();
 
+            // Only add worktree if path does not match that of a current session
             for worktree in &project.worktrees {
                 if !active_paths.contains(worktree.path.as_str()) {
                     list_entries.push(ListEntry::AvailableWorktree(
@@ -162,90 +225,100 @@ impl Component for Home {
                 }
                 _ => Ok(None),
             },
-            PopupState::NewProject { project, focused } => match key.code {
-                KeyCode::Tab => {
-                    *focused = (*focused + 1) % 2;
-                    return Ok(None);
+            PopupState::NewProject { form } => match form.handle_key(key) {
+                FormEvent::Submit => {
+                    let name: String = form.value(ProjectField::Name as usize).into();
+                    let path: String = form.value(ProjectField::Path as usize).into();
+                    let project = Project {
+                        id: Uuid::new_v4(),
+                        name: name,
+                        path: path,
+                        sessions: vec![],
+                        worktrees: vec![], // TODO: this should probably init based on existing
+                                           // worktrees for git repo, if any
+                    };
+                    self.popup_state = PopupState::Closed;
+                    Ok(Some(Action::SubmitProject(project)))
                 }
-                KeyCode::BackTab => {
-                    if *focused > 0 {
-                        *focused -= 1;
-                    }
-                    return Ok(None);
-                }
-                KeyCode::Char(c) => {
-                    match *focused {
-                        0 => project.name.push(c),
-                        1 => project.path.push(c),
-                        _ => {}
-                    }
+                FormEvent::Cancel => {
+                    self.popup_state = PopupState::Closed;
                     Ok(None)
                 }
-                KeyCode::Backspace => {
-                    match *focused {
-                        0 => {
-                            project.name.pop();
-                        }
-                        1 => {
-                            project.path.pop();
-                        }
-                        _ => {}
-                    }
-                    Ok(None)
-                }
-                KeyCode::Enter => {
-                    let project = project.clone();
-                    self.popup_state = PopupState::Closed;
-                    return Ok(Some(Action::SubmitProject(project)));
-                }
-                KeyCode::Esc => {
-                    self.popup_state = PopupState::Closed;
-                    return Ok(None);
-                }
-                _ => Ok(None),
+                FormEvent::Continue => Ok(None),
             },
-            PopupState::NewSession { session, focused } => match key.code {
-                KeyCode::Tab => {
-                    *focused = (*focused + 1) % 3;
-                    return Ok(None);
-                }
-                KeyCode::BackTab => {
-                    if *focused > 0 {
-                        *focused -= 1;
-                    }
-                    return Ok(None);
-                }
-                KeyCode::Char(c) => {
-                    match *focused {
-                        0 => session.name.push(c),
-                        1 => session.path.push(c),
-                        2 => session.worktree.push(c),
-                        _ => {}
-                    }
-                    Ok(None)
-                }
-                KeyCode::Backspace => {
-                    match *focused {
-                        0 => {
-                            session.name.pop();
-                        }
-                        1 => {
-                            session.path.pop();
-                        }
-                        2 => {
-                            session.worktree.pop();
-                        }
-                        _ => {}
-                    }
-                    Ok(None)
-                }
-                KeyCode::Enter => {
-                    let session = session.clone();
+            PopupState::EditProject { form, project } => match form.handle_key(key) {
+                FormEvent::Submit => {
+                    let name: String = form.value(ProjectField::Name as usize).into();
+                    let path: String = form.value(ProjectField::Path as usize).into();
+                    let mut project = project.clone();
                     self.popup_state = PopupState::Closed;
-                    return Ok(Some(Action::SubmitSession(session)));
+                    project.name = name;
+                    project.path = path;
+                    Ok(Some(Action::UpdateProject(project.clone())))
                 }
-                KeyCode::Esc => Ok(Some(Action::CancelInput)),
-                _ => Ok(None),
+                FormEvent::Cancel => {
+                    self.popup_state = PopupState::Closed;
+                    Ok(None)
+                }
+                FormEvent::Continue => Ok(None),
+            },
+            PopupState::NewSession {
+                form,
+                project_id,
+                base_path: _base_path,
+            } => match form.handle_key(key) {
+                FormEvent::Submit => {
+                    let path: String = form.value(NewSessionField::Path as usize).into();
+                    let worktree_name: String =
+                        form.value(NewSessionField::WorktreeName as usize).into();
+                    let session = Session {
+                        id: Uuid::new_v4(),
+                        project_id: *project_id,
+                        name: form.value(NewSessionField::Name as usize).into(),
+                        path: Some(path.clone()).filter(|s| !s.is_empty()),
+                        worktree: (!worktree_name.is_empty()).then(|| Worktree {
+                            name: worktree_name.clone(),
+                            path: path,
+                        }),
+                    };
+                    self.popup_state = PopupState::Closed;
+                    Ok(Some(Action::SubmitSession(session)))
+                }
+                FormEvent::Cancel => {
+                    self.popup_state = PopupState::Closed;
+                    Ok(None)
+                }
+                FormEvent::Continue => Ok(None),
+                // TODO: Find a way to integrate a feature like this
+                // FormEvent::Continue => {
+                //     if form.focused == NewSessionField::WorktreeName as usize {
+                //         let wt_name = form
+                //             .value(NewSessionField::WorktreeName as usize)
+                //             .to_string();
+                //         form.values[NewSessionField::Path as usize] = if wt_name.is_empty() {
+                //             String::new()
+                //         } else {
+                //             format!("{}-{}", base_path, wt_name)
+                //         }
+                //     }
+                //     Ok(None)
+                // }
+            },
+            PopupState::EditSession { form, session } => match form.handle_key(key) {
+                FormEvent::Submit => {
+                    let name: String = form.value(EditSessionField::Name as usize).into();
+                    let path: String = form.value(EditSessionField::Path as usize).into();
+                    let mut session = session.clone();
+                    self.popup_state = PopupState::Closed;
+                    session.name = name;
+                    session.path = Some(path);
+                    Ok(Some(Action::SubmitSession(session.clone())))
+                }
+                FormEvent::Cancel => {
+                    self.popup_state = PopupState::Closed;
+                    Ok(None)
+                }
+                FormEvent::Continue => Ok(None),
             },
             PopupState::KillSession { session } => match key.code {
                 KeyCode::Char(c) => match c {
@@ -320,23 +393,19 @@ impl Component for Home {
                         .select(Some(self.search_matches[self.search_cursor]));
                 }
             }
-            Action::CmdManageProjects => {
-                let project_id = Uuid::new_v4();
+            Action::CmdAddProject => {
                 self.popup_state = PopupState::NewProject {
-                    project: Project {
-                        id: project_id,
-                        name: String::default(),
-                        path: String::default(),
-                        sessions: vec![],
-                        worktrees: vec![],
-                    },
-                    focused: 0,
+                    form: FormPopup::new(&[
+                        (ProjectField::Name.label(), "".to_string()),
+                        (ProjectField::Path.label(), "".to_string()),
+                    ]),
                 }
             }
             Action::CmdAddSession => {
+                let mut name = String::default();
+                let mut worktree_name = String::default();
                 let mut path = String::default();
                 let mut project_id: Option<Uuid> = None;
-                let mut name = String::default();
                 if let Some(i) = self.list_state.selected() {
                     if let Some(entry) = self.list_entries.get(i) {
                         match entry {
@@ -349,7 +418,8 @@ impl Component for Home {
                                 project_id = Some(p.id.clone());
                             }
                             ListEntry::AvailableWorktree(p, wt) => {
-                                name = wt.name.clone(); // use worktree name as default session name
+                                name = wt.name.clone();
+                                worktree_name = wt.name.clone();
                                 path = wt.path.clone();
                                 project_id = Some(p.id.clone());
                             }
@@ -358,14 +428,58 @@ impl Component for Home {
                     }
                 }
                 self.popup_state = PopupState::NewSession {
-                    session: Session {
-                        id: Uuid::new_v4(),
-                        project_id: project_id,
-                        name: name,
-                        path: path,
-                        worktree: String::default(),
-                    },
-                    focused: 0,
+                    form: FormPopup::new(&[
+                        (NewSessionField::Name.label(), name.to_string()),
+                        (
+                            NewSessionField::WorktreeName.label(),
+                            worktree_name.to_string(),
+                        ),
+                        (NewSessionField::Path.label(), path.to_string()),
+                    ]),
+                    project_id: project_id,
+                    base_path: path,
+                }
+            }
+            Action::CmdEdit => {
+                if let Some(i) = self.list_state.selected() {
+                    if let Some(entry) = self.list_entries.get(i) {
+                        match entry {
+                            ListEntry::Project(p) => {
+                                self.popup_state = PopupState::EditProject {
+                                    form: FormPopup::new(&[
+                                        (ProjectField::Name.label(), p.name.to_string()),
+                                        (ProjectField::Path.label(), p.path.to_string()),
+                                    ]),
+                                    project: p.clone(),
+                                }
+                            }
+                            ListEntry::ProjectSession(_, s) => {
+                                self.popup_state = PopupState::EditSession {
+                                    form: FormPopup::new(&[
+                                        (EditSessionField::Name.label(), s.name.to_string()),
+                                        (
+                                            EditSessionField::Path.label(),
+                                            s.path.clone().unwrap_or_default(),
+                                        ),
+                                    ]),
+                                    session: s.clone(),
+                                }
+                            }
+                            ListEntry::AvailableWorktree(_, _) => {}
+                            ListEntry::Session(s) => {
+                                self.popup_state = PopupState::EditSession {
+                                    form: FormPopup::new(&[
+                                        (EditSessionField::Name.label(), s.name.to_string()),
+                                        (
+                                            EditSessionField::Path.label(),
+                                            s.path.clone().unwrap_or_default(),
+                                        ),
+                                    ]),
+                                    session: s.clone(),
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Action::CmdDeleteItem => {
@@ -421,17 +535,15 @@ impl Component for Home {
                     format!(" - {}", p.name.clone()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ))),
-                ListEntry::ProjectSession(_, s) => ListItem::new(Line::from(vec![
-                    Span::raw("     "),
-                    Span::raw(s.name.clone()),
-                ])),
-                ListEntry::AvailableWorktree(_, worktree) => ListItem::new(Line::from(vec![
-                    Span::raw("     "),
-                    Span::raw(worktree.path.clone()),
-                ])),
-                ListEntry::Session(s) => {
-                    ListItem::new(Line::from(vec![Span::raw(" "), Span::raw(s.name.clone())]))
+                ListEntry::ProjectSession(_, s) => {
+                    ListItem::new(Line::from(Span::raw(format!("     {}", s.name.clone(),))))
                 }
+                ListEntry::AvailableWorktree(_, worktree) => ListItem::new(Line::from(format!(
+                    "     [worktree] ({})  {}",
+                    worktree.name.clone(),
+                    worktree.path.clone()
+                ))),
+                ListEntry::Session(s) => ListItem::new(Line::from(format!(" {}", s.name.clone()))),
             })
             .collect();
 
@@ -443,26 +555,36 @@ impl Component for Home {
 
         match &self.popup_state {
             PopupState::Closed => {}
-            PopupState::NewProject { project, focused } => {
-                let fields = &[
-                    ("Name", project.name.as_str(), *focused == 0),
-                    ("Path", project.path.as_str(), *focused == 1),
-                ];
-                open_input_popup(frame, area, "New Project", fields);
+            PopupState::NewProject { form } => {
+                open_input_popup(frame, area, "New Project", form);
             }
-            PopupState::NewSession { session, focused } => {
-                let fields = &[
-                    ("Name", session.name.as_str(), *focused == 0),
-                    ("Path", session.path.as_str(), *focused == 1),
-                    ("Worktree", session.worktree.as_str(), *focused == 2),
-                ];
-                open_input_popup(frame, area, "New Session", fields);
+            PopupState::EditProject {
+                form,
+                project: _project,
+            } => {
+                open_input_popup(frame, area, "Edit Project", form);
+            }
+            PopupState::NewSession {
+                form,
+                project_id: _project_id,
+                base_path: _base_path,
+            } => {
+                open_input_popup(frame, area, "New Session", form);
+            }
+            PopupState::EditSession {
+                form,
+                session: _session,
+            } => {
+                open_input_popup(frame, area, "Edit Session", form);
             }
             PopupState::KillSession { session } => {
                 let body = format!("Kill \"{}\"?", session.name);
                 open_confirmation_popup(frame, area, "Kill Session", &body);
             }
-            PopupState::RemoveWorktree { project, worktree } => {
+            PopupState::RemoveWorktree {
+                project: _project,
+                worktree,
+            } => {
                 let body = format!("Remove \"{}\"?", worktree.name);
                 open_confirmation_popup(frame, area, "Remove Worktree", &body);
             }
@@ -472,8 +594,8 @@ impl Component for Home {
     }
 }
 
-fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str, &str, bool)]) {
-    let height = (2 * fields.len() - 1) as u16 + 4;
+fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form: &FormPopup) {
+    let height = (2 * form.labels.len() - 1) as u16 + 4;
     let popup = area.centered(
         Constraint::Percentage(40),
         Constraint::Length(height as u16),
@@ -487,7 +609,7 @@ fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str,
     });
 
     let mut constraints: Vec<Constraint> = vec![Constraint::Fill(1)];
-    for _ in fields {
+    for _ in 0..form.labels.len() {
         constraints.push(Constraint::Length(1));
         constraints.push(Constraint::Length(1));
     }
@@ -499,11 +621,13 @@ fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, fields: &[(&str,
     let mut active_area = Rect::default();
     let mut active_label = String::default();
     let mut active_text = String::default();
-    for (i, (label, value, is_focused)) in fields.iter().enumerate() {
-        let widget = labeled_input(label, value, *is_focused);
+    for (i, label) in form.labels.iter().enumerate() {
+        let is_focused = form.focused == i;
+        let value = form.value(i);
+        let widget = labeled_input(label, value, is_focused);
         let area = areas[(i * 2) + 1];
         frame.render_widget(widget, area);
-        if *is_focused {
+        if is_focused {
             active_area = area;
             active_label = label.to_string();
             active_text = value.to_string();

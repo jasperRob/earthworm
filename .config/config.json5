@@ -12,10 +12,11 @@
       "</>": "CmdStartSearch",
       "<n>": "CmdSearchNext",
       "<Shift-n>": "CmdSearchPrev",
-      "<Space><p>": "CmdManageProjects",
+      "<Space><p>": "CmdAddProject",
       "<Space><s>": "CmdAddSession",
       "<Space><d>": "CmdDeleteItem",
       "<Space><a>": "CmdAttach",
+      "<Space><e>": "CmdEdit",
     },
   }
 }
