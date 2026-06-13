@@ -190,6 +190,13 @@ impl App {
                     self.persist_state();
                     self.broadcast_state()?;
                 }
+                Action::RemoveProject(ref project) => {
+                    self.projects.remove(&project.id);
+                    self.fetch_and_map_tmux_sessions()?;
+                    self.persist_state();
+                    self.broadcast_state()?;
+                    self.action_tx.send(Action::ClearScreen)?;
+                }
                 Action::SubmitSession(ref session) => {
                     // TODO: Make this better. Too nested
                     let mut project: Option<&Project> = None;
@@ -407,6 +414,6 @@ impl App {
     }
 
     fn dispatch_error(&self, e: impl std::fmt::Display) {
-        self.action_tx.send(Action::Error(e.to_string()));
+        let _ = self.action_tx.send(Action::Error(e.to_string()));
     }
 }
