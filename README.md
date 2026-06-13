@@ -8,6 +8,8 @@ worktrees.
 - Organise tmux sessions under git projects
 - Automatically discover existing git worktrees for a project
 - Create a new git worktree and tmux session in a single step
+- Edit and delete projects, sessions, and worktrees
+- Fuzzy search across the session list
 - State persists across restarts
 - Configurable keybindings
 
@@ -38,16 +40,22 @@ earthworm
 
 ### Keybindings
 
-| Key      | Action                     |
-| -------- | -------------------------- |
-| `j`      | Move down                  |
-| `k`      | Move up                    |
-| `a`      | Attach to selected session |
-| `n`      | New session                |
-| `p`      | New project                |
-| `d`      | Delete selected session    |
-| `q`      | Quit                       |
-| `Ctrl-z` | Suspend                    |
+| Key           | Action                     |
+| ------------- | -------------------------- |
+| `j`           | Move down                  |
+| `k`           | Move up                    |
+| `gg`          | Jump to top                |
+| `G`           | Jump to bottom             |
+| `/`           | Start search               |
+| `n`           | Next search match          |
+| `N`           | Previous search match      |
+| `Space p`     | New project                |
+| `Space s`     | New session                |
+| `Space a`     | Attach to selected session |
+| `Space e`     | Edit selected item         |
+| `Space d`     | Delete selected item       |
+| `q`           | Quit                       |
+| `Ctrl-z`      | Suspend                    |
 
 ## Concepts
 
@@ -77,10 +85,11 @@ directory:
       "<q>": "Quit",
       "<j>": "CmdSelectNext",
       "<k>": "CmdSelectPrev",
-      "<p>": "CmdManageProjects",
-      "<n>": "CmdAddSession",
-      "<d>": "CmdDeleteItem",
-      "<a>": "CmdAttach",
+      "<Space><p>": "CmdAddProject",
+      "<Space><s>": "CmdAddSession",
+      "<Space><e>": "CmdEdit",
+      "<Space><d>": "CmdDeleteItem",
+      "<Space><a>": "CmdAttach",
     },
   },
 }

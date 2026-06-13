@@ -35,6 +35,7 @@ pub enum Action {
     // Project
     SubmitProject(Project),
     UpdateProject(Project),
+    RemoveProject(Project),
     // Session
     SubmitSession(Session),
     UpdateSession(Session),

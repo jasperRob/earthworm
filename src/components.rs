@@ -11,6 +11,7 @@ pub mod form_popup;
 pub mod fps;
 pub mod home;
 pub mod notification;
+pub mod popups;
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.
 ///
