@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph},
 };
 
-use crate::{action::Action, components::form_popup::FormPopup};
+use crate::{action::Action, components::form_popup::FormPopup, theme::SECONDARY};
 
 #[derive(Default)]
 pub enum PopupState {
@@ -83,7 +83,7 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
 
 pub(super) fn labeled_input<'a>(label: &'a str, value: &'a str, is_focused: bool) -> Paragraph<'a> {
     let label_style = if is_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(SECONDARY)
     } else {
         Style::default()
     };

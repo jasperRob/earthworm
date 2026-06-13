@@ -14,6 +14,7 @@ mod logging;
 mod project;
 mod session;
 mod state;
+mod theme;
 mod tmux;
 mod tui;
 mod worktree;

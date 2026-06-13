@@ -11,16 +11,17 @@ use crate::{
     },
     project::Project,
     session::Session,
+    theme::SECONDARY,
     worktree::Worktree,
 };
 use color_eyre::eyre::Ok;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 use uuid::Uuid;
 
@@ -309,19 +310,24 @@ impl Component for Home {
         Ok(None)
     }
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
+        let title_bar = Paragraph::new("earthworm")
+            .block(Block::default())
+            .style(Style::default().fg(SECONDARY))
+            .alignment(Alignment::Center);
+
         let items: Vec<ListItem> = self
             .list_entries
             .iter()
             .map(|entry| match entry {
                 ListEntry::Project(p) => ListItem::new(Line::from(Span::styled(
                     format!(" - {}", p.name.clone()),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
                 ))),
                 ListEntry::ProjectSession(_, s) => {
                     ListItem::new(Line::from(Span::raw(format!("     {}", s.name.clone(),))))
                 }
                 ListEntry::AvailableWorktree(_, worktree) => ListItem::new(Line::from(format!(
-                    "     [worktree] ({})  {}",
+                    "     [worktree] ({}) {}",
                     worktree.name.clone(),
                     worktree.path.clone()
                 ))),
@@ -330,10 +336,19 @@ impl Component for Home {
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Sessions"))
+            .block(Block::default())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        frame.render_stateful_widget(list, area, &mut self.list_state);
+        let inner = area.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
+
+        let [title_row, list_body] =
+            Layout::vertical(vec![Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+
+        frame.render_widget(title_bar, title_row);
+        frame.render_stateful_widget(list, list_body, &mut self.list_state);
 
         match &self.popup_state {
             PopupState::Closed => {}
