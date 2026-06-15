@@ -9,7 +9,8 @@ worktrees.
 - Automatically discover existing git worktrees for a project
 - Create a new git worktree and tmux session in a single step
 - Edit and delete projects, sessions, and worktrees
-- Fuzzy search across the session list
+- Search across the session list
+- Help popup showing all keybindings
 - State persists across restarts
 - Configurable keybindings
 
@@ -40,22 +41,24 @@ earthworm
 
 ### Keybindings
 
-| Key           | Action                     |
-| ------------- | -------------------------- |
-| `j`           | Move down                  |
-| `k`           | Move up                    |
-| `gg`          | Jump to top                |
-| `G`           | Jump to bottom             |
-| `/`           | Start search               |
-| `n`           | Next search match          |
-| `N`           | Previous search match      |
-| `Space p`     | New project                |
-| `Space s`     | New session                |
-| `Space a`     | Attach to selected session |
-| `Space e`     | Edit selected item         |
-| `Space d`     | Delete selected item       |
-| `q`           | Quit                       |
-| `Ctrl-z`      | Suspend                    |
+| Key       | Action                     |
+| --------- | -------------------------- |
+| `j`       | Move down                  |
+| `k`       | Move up                    |
+| `gg`      | Jump to top                |
+| `G`       | Jump to bottom             |
+| `/`       | Start search               |
+| `n`       | Next search match          |
+| `N`       | Previous search match      |
+| `Space p` | New project                |
+| `Space s` | New session                |
+| `Space a` | Attach to selected session |
+| `Space e` | Edit selected item         |
+| `Space d` | Delete selected item       |
+| `?`       | Show help                  |
+| `q`       | Quit                       |
+| `Ctrl-c`  | Quit                       |
+| `Ctrl-z`  | Suspend                    |
 
 ## Concepts
 
@@ -68,8 +71,7 @@ one step. Sessions linked to a project are shown indented beneath it in the
 list.
 
 **Worktrees** — when you add a project, earthworm scans the repo for existing
-git worktrees and lists them automatically. Selecting one and pressing `n` opens
-it as a new tmux session without creating a new worktree.
+git worktrees and lists them automatically.
 
 ## Configuration
 
@@ -83,13 +85,21 @@ directory:
   keybindings: {
     Home: {
       "<q>": "Quit",
+      "<Ctrl-c>": "Quit",
+      "<Ctrl-z>": "Suspend",
       "<j>": "CmdSelectNext",
       "<k>": "CmdSelectPrev",
+      "<g><g>": "CmdJumpTop",
+      "<Shift-g>": "CmdJumpBottom",
+      "</>": "CmdStartSearch",
+      "<n>": "CmdSearchNext",
+      "<Shift-n>": "CmdSearchPrev",
       "<Space><p>": "CmdAddProject",
       "<Space><s>": "CmdAddSession",
       "<Space><e>": "CmdEdit",
       "<Space><d>": "CmdDeleteItem",
       "<Space><a>": "CmdAttach",
+      "<?>": "Help",
     },
   },
 }
