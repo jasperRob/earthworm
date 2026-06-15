@@ -1,5 +1,6 @@
 pub mod edit_project;
 pub mod edit_session;
+pub mod help;
 pub mod new_project;
 pub mod new_session;
 pub mod remove_project;
@@ -10,7 +11,7 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Clear, Paragraph},
 };
@@ -96,7 +97,7 @@ pub(super) fn labeled_input<'a>(label: &'a str, value: &'a str, is_focused: bool
 pub(super) fn open_confirmation_popup(frame: &mut Frame, area: Rect, title: &str, body: &str) {
     let popup = area.centered(
         Constraint::Length(body.len() as u16 * 2),
-        Constraint::Length(11),
+        Constraint::Length(10),
     );
     frame.render_widget(Clear, popup);
     frame.render_widget(Block::bordered().title(title), popup);
@@ -106,13 +107,12 @@ pub(super) fn open_confirmation_popup(frame: &mut Frame, area: Rect, title: &str
     });
     let [_, text_area, _] = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(5),
+        Constraint::Length(4),
         Constraint::Fill(1),
     ])
     .areas(inner);
     let text = Text::from(vec![
         Line::from(body).centered(),
-        Line::from(""),
         Line::from(""),
         Line::from(""),
         Line::from("y / n").centered(),

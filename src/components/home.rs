@@ -3,25 +3,26 @@ use std::collections::{HashMap, HashSet};
 use super::Component;
 use crate::{
     action::Action,
+    app::Mode,
     components::popups::{
         PopupOutcome, PopupState, edit_project::EditProjectPopup, edit_session::EditSessionPopup,
-        new_project::NewProjectPopup, new_session::NewSessionPopup,
+        help::HelpPopup, new_project::NewProjectPopup, new_session::NewSessionPopup,
         remove_project::RemoveProjectPopup, remove_session::RemoveSessionPopup,
         remove_worktree::RemoveWorktreePopup,
     },
+    config::key_event_to_string,
     project::Project,
     session::Session,
     theme::SECONDARY,
     worktree::Worktree,
 };
-use color_eyre::eyre::Ok;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 use uuid::Uuid;
 
@@ -34,6 +35,7 @@ enum ListEntry {
 
 #[derive(Default)]
 pub struct Home {
+    keymaps: Vec<(String, String)>,
     list_entries: Vec<ListEntry>,
     list_state: ListState,
     popup_state: PopupState,
@@ -46,6 +48,7 @@ pub struct Home {
 impl Home {
     pub fn new() -> Self {
         Self {
+            keymaps: Vec::default(),
             list_entries: Vec::default(),
             list_state: ListState::default(),
             popup_state: PopupState::Closed,
@@ -173,6 +176,9 @@ impl Component for Home {
     }
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
         match action {
+            Action::Help => {
+                self.popup_state = PopupState::Open(Box::new(HelpPopup::new(self.keymaps.clone())))
+            }
             Action::StateUpdated(projects, sessions) => {
                 self.rebuild_list(projects, sessions);
             }
@@ -310,10 +316,11 @@ impl Component for Home {
         Ok(None)
     }
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let title_bar = Paragraph::new("earthworm")
-            .block(Block::default())
-            .style(Style::default().fg(SECONDARY))
-            .alignment(Alignment::Center);
+        let title_bar = Paragraph::new(" earthworm").block(Block::default()).style(
+            Style::default()
+                .fg(SECONDARY)
+                .add_modifier(Modifier::REVERSED),
+        );
 
         let items: Vec<ListItem> = self
             .list_entries
@@ -339,22 +346,58 @@ impl Component for Home {
             .block(Block::default())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
+        let info_bar = Paragraph::new(" ?: help")
+            .block(Block::default())
+            .style(Style::default().add_modifier(Modifier::REVERSED));
+
+        let search_bar = Paragraph::new(format!(
+            "{}{}",
+            if self.search.is_some() { "/" } else { "" },
+            self.search.as_deref().unwrap_or("")
+        ))
+        .block(Block::default());
+
         let inner = area.inner(Margin {
             horizontal: 1,
             vertical: 1,
         });
 
-        let [title_row, list_body] =
-            Layout::vertical(vec![Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+        let [title_row, _, list_body, info_row, search_row] = Layout::vertical(vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
 
         frame.render_widget(title_bar, title_row);
         frame.render_stateful_widget(list, list_body, &mut self.list_state);
+        frame.render_widget(info_bar, info_row);
+        frame.render_widget(search_bar, search_row);
 
         match &self.popup_state {
             PopupState::Closed => {}
             PopupState::Open(p) => p.draw(frame, area),
         }
 
+        Ok(())
+    }
+
+    fn register_config_handler(&mut self, config: crate::config::Config) -> color_eyre::Result<()> {
+        if let Some(bindings) = config.keybindings.0.get(&Mode::Home) {
+            self.keymaps = bindings
+                .iter()
+                .map(|(keys, action)| {
+                    let key_str = keys
+                        .iter()
+                        .map(key_event_to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (key_str, action.to_string())
+                })
+                .collect();
+        }
         Ok(())
     }
 }
