@@ -62,7 +62,6 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
 
     let mut active_area = Rect::default();
     let mut active_label = String::default();
-    let mut active_text = String::default();
     for (i, label) in form.labels.iter().enumerate() {
         let is_focused = form.focused == i;
         let value = form.value(i);
@@ -72,12 +71,15 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
         if is_focused {
             active_area = area;
             active_label = label.to_string();
-            active_text = value.to_string();
         }
     }
 
     frame.set_cursor_position((
-        active_area.x + 1 + active_label.len() as u16 + 2 + active_text.len() as u16,
+        active_area.x
+            + 1
+            + active_label.len() as u16
+            + 2
+            + form.cursor_positions[form.focused] as u16,
         active_area.y,
     ));
 }
