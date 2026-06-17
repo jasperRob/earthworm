@@ -209,14 +209,12 @@ impl App {
                                 let session_path = session.path.clone();
                                 if let Some(path) = session_path {
                                     let session_worktree = session.worktree.clone();
-                                    if let Some(worktree) = session_worktree {
-                                        if !p.worktrees.iter().any(|wt| wt.name == worktree.name) {
-                                            if let Err(e) =
-                                                create_worktree(&p.path, &worktree.name, &path)
-                                            {
-                                                self.dispatch_error(e);
-                                            }
-                                        }
+                                    if let Some(worktree) = session_worktree
+                                        && !p.worktrees.iter().any(|wt| wt.name == worktree.name)
+                                        && let Err(e) =
+                                            create_worktree(&p.path, &worktree.name, &path)
+                                    {
+                                        self.dispatch_error(e);
                                     }
                                 }
                             }

@@ -48,8 +48,8 @@ impl Popup for NewProjectPopup {
                 let path: String = self.form.value(Field::Path as usize).into();
                 let project = Project {
                     id: Uuid::new_v4(),
-                    name: name,
-                    path: path,
+                    name,
+                    path,
                     sessions: vec![],
                     // TODO: should init based on existing worktrees for git repo
                     worktrees: vec![],

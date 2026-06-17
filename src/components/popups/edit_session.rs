@@ -36,7 +36,7 @@ impl EditSessionPopup {
                 (Field::Name.label(), String::default()),
                 (Field::Path.label(), String::default()),
             ]),
-            session: session,
+            session,
         }
     }
 }

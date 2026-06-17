@@ -13,7 +13,7 @@ pub struct RemoveSessionPopup {
 
 impl RemoveSessionPopup {
     pub fn new(session: Session) -> Self {
-        Self { session: session }
+        Self { session }
     }
 }
 

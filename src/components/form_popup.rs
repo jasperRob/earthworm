@@ -24,10 +24,10 @@ impl FormPopup {
             cursor_positions.push(v.chars().count());
         }
         Self {
-            labels: labels,
-            values: values,
+            labels,
+            values,
             focused: 0,
-            cursor_positions: cursor_positions,
+            cursor_positions,
         }
     }
 

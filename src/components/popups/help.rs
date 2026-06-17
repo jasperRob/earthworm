@@ -35,7 +35,7 @@ pub struct HelpPopup {
 
 impl HelpPopup {
     pub fn new(keymaps: Vec<(String, String)>) -> Self {
-        Self { keymaps: keymaps }
+        Self { keymaps }
     }
 }
 

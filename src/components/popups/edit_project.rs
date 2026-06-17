@@ -36,7 +36,7 @@ impl EditProjectPopup {
                 (Field::Name.label(), String::default()),
                 (Field::Path.label(), String::default()),
             ]),
-            project: project,
+            project,
         }
     }
 }
