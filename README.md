@@ -55,6 +55,7 @@ earthworm
 | `Space a` | Attach to selected session |
 | `Space e` | Edit selected item         |
 | `Space d` | Delete selected item       |
+| `Space b` | Select previous session    |
 | `?`       | Show help                  |
 | `q`       | Quit                       |
 | `Ctrl-c`  | Quit                       |
