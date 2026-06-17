@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::Component;
 use crate::{
@@ -43,6 +43,7 @@ pub struct Home {
     search: Option<String>,
     search_matches: Vec<usize>,
     search_cursor: usize,
+    session_history: VecDeque<Session>,
 }
 
 impl Home {
@@ -56,6 +57,7 @@ impl Home {
             search: None,
             search_matches: Vec::default(),
             search_cursor: usize::default(),
+            session_history: VecDeque::new(),
         }
     }
 
@@ -103,6 +105,13 @@ impl Home {
             let i = self.list_state.selected().unwrap_or(0);
             self.list_state
                 .select(Some(i.min(self.list_entries.len() - 1)));
+        }
+    }
+
+    fn push_to_session_history(&mut self, session: Session) {
+        self.session_history.push_back(session);
+        if self.session_history.len() > 2 {
+            self.session_history.pop_front();
         }
     }
 }
@@ -296,19 +305,53 @@ impl Component for Home {
                 self.popup_state = PopupState::Closed;
             }
             Action::CmdAttach => {
+                let mut session: Option<Session> = None;
                 if let Some(i) = self.list_state.selected() {
                     if let Some(entry) = self.list_entries.get(i) {
                         match entry {
                             ListEntry::Project(_) => {}
                             ListEntry::ProjectSession(_, s) => {
-                                return Ok(Some(Action::AttachSession(s.clone())));
+                                session = Some(s.clone());
                             }
                             ListEntry::Session(s) => {
-                                return Ok(Some(Action::AttachSession(s.clone())));
+                                session = Some(s.clone());
                             }
                             ListEntry::AvailableWorktree(_, _) => {}
                         }
                     }
+                }
+                if let Some(s) = session {
+                    self.push_to_session_history(s.clone());
+                    return Ok(Some(Action::AttachSession(s)));
+                }
+            }
+            Action::CmdSelectPrevSession => {
+                if self.session_history.len() >= 2 {
+                    let prev_prev = &self.session_history[self.session_history.len() - 2];
+                    let index = self
+                        .list_entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, v)| match v {
+                            ListEntry::Project(_) => None,
+                            ListEntry::ProjectSession(_, s) => {
+                                if s.id == prev_prev.id {
+                                    Some(i)
+                                } else {
+                                    None
+                                }
+                            }
+                            ListEntry::Session(s) => {
+                                if s.id == prev_prev.id {
+                                    Some(i)
+                                } else {
+                                    None
+                                }
+                            }
+                            ListEntry::AvailableWorktree(_, _) => None,
+                        })
+                        .next();
+                    self.list_state.select(index);
                 }
             }
             _ => {}
