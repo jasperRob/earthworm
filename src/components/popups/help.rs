@@ -27,6 +27,7 @@ const DISPLAY_ORDER: &[Action] = &[
     Action::CmdDeleteItem,
     Action::CmdAttach,
     Action::CmdEdit,
+    Action::CmdSelectPrevSession,
 ];
 
 pub struct HelpPopup {
