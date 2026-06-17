@@ -30,6 +30,7 @@ pub enum Action {
     CmdSearchPrev,
     CmdAttach,
     CmdEdit,
+    CmdSelectPrevSession,
     // Input
     CancelInput, // TODO: This should be removed in favour of FormPopup cancellation
     // Project
