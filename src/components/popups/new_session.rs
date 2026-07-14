@@ -70,7 +70,6 @@ impl NewSessionPopup {
                 },
             ]),
             all_projects: all_projects,
-            project_id,
         }
     }
 }
