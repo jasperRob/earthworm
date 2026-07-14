@@ -53,8 +53,8 @@ impl FormPopup {
             validations.push(form_input.validation);
         }
         Self {
-            labels: labels,
-            values: values,
+            labels,
+            values,
             cursor_positions: cursor_positions,
             validations: validations,
             focused: 0,

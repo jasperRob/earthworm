@@ -70,6 +70,7 @@ impl NewSessionPopup {
                 },
             ]),
             all_projects: all_projects,
+            project_id,
         }
     }
 }
@@ -93,7 +94,7 @@ impl Popup for NewSessionPopup {
                     path: Some(path.clone()).filter(|s| !s.is_empty()),
                     worktree: (!worktree_name.is_empty()).then(|| Worktree {
                         name: worktree_name.clone(),
-                        path: path,
+                        path,
                     }),
                 };
                 PopupOutcome::Submitted(Action::SubmitSession(session))

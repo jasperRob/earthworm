@@ -44,7 +44,7 @@ impl EditSessionPopup {
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
                 },
             ]),
-            session: session,
+            session,
         }
     }
 }

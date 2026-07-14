@@ -27,6 +27,7 @@ const DISPLAY_ORDER: &[Action] = &[
     Action::CmdDeleteItem,
     Action::CmdAttach,
     Action::CmdEdit,
+    Action::CmdSelectPrevSession,
 ];
 
 pub struct HelpPopup {
@@ -35,7 +36,7 @@ pub struct HelpPopup {
 
 impl HelpPopup {
     pub fn new(keymaps: Vec<(String, String)>) -> Self {
-        Self { keymaps: keymaps }
+        Self { keymaps }
     }
 }
 

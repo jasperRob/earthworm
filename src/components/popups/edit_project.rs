@@ -44,7 +44,7 @@ impl EditProjectPopup {
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
                 },
             ]),
-            project: project,
+            project,
         }
     }
 }

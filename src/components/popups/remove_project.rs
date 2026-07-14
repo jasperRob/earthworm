@@ -13,7 +13,7 @@ pub struct RemoveProjectPopup {
 
 impl RemoveProjectPopup {
     pub fn new(project: Project) -> Self {
-        Self { project: project }
+        Self { project }
     }
 }
 

@@ -15,10 +15,7 @@ pub struct RemoveWorktreePopup {
 
 impl RemoveWorktreePopup {
     pub fn new(worktree: Worktree, project: Project) -> Self {
-        Self {
-            worktree: worktree,
-            project: project,
-        }
+        Self { worktree, project }
     }
 }
 
