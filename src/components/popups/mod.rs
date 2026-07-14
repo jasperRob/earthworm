@@ -16,7 +16,11 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph},
 };
 
-use crate::{action::Action, components::form_popup::FormPopup, theme::SECONDARY};
+use crate::{
+    action::Action,
+    components::form_popup::FormPopup,
+    theme::{ERROR, ERROR_FOCUSED, SECONDARY},
+};
 
 #[derive(Default)]
 pub enum PopupState {
@@ -65,7 +69,8 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
     for (i, label) in form.labels.iter().enumerate() {
         let is_focused = form.focused == i;
         let value = form.value(i);
-        let widget = labeled_input(label, value, is_focused);
+        let is_valid = form.validate(i);
+        let widget = labeled_input(label, value, is_focused, is_valid);
         let area = areas[(i * 2) + 1];
         frame.render_widget(widget, area);
         if is_focused {
@@ -84,8 +89,17 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
     ));
 }
 
-pub(super) fn labeled_input<'a>(label: &'a str, value: &'a str, is_focused: bool) -> Paragraph<'a> {
-    let label_style = if is_focused {
+pub(super) fn labeled_input<'a>(
+    label: &'a str,
+    value: &'a str,
+    is_focused: bool,
+    is_valid: bool,
+) -> Paragraph<'a> {
+    let label_style = if !is_valid && is_focused {
+        Style::default().fg(ERROR_FOCUSED)
+    } else if !is_valid {
+        Style::default().fg(ERROR)
+    } else if is_focused {
         Style::default().fg(SECONDARY)
     } else {
         Style::default()

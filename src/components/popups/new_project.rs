@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormPopup},
+        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
         popups::{Popup, PopupOutcome, open_input_popup},
     },
     project::Project,
@@ -32,9 +32,17 @@ pub struct NewProjectPopup {
 impl NewProjectPopup {
     pub fn new() -> Self {
         Self {
-            form: FormPopup::new(&[
-                (Field::Name.label(), String::default()),
-                (Field::Path.label(), String::default()),
+            form: FormPopup::new(vec![
+                FormInput {
+                    label: Field::Name.label(),
+                    initial_value: String::default(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
+                FormInput {
+                    label: Field::Path.label(),
+                    initial_value: String::default(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
             ]),
         }
     }

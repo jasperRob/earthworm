@@ -4,7 +4,7 @@ use ratatui::{Frame, layout::Rect};
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormPopup},
+        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
         popups::{Popup, PopupOutcome, open_input_popup},
     },
     project::Project,
@@ -32,9 +32,17 @@ pub struct EditProjectPopup {
 impl EditProjectPopup {
     pub fn new(project: Project) -> Self {
         Self {
-            form: FormPopup::new(&[
-                (Field::Name.label(), String::default()),
-                (Field::Path.label(), String::default()),
+            form: FormPopup::new(vec![
+                FormInput {
+                    label: Field::Name.label(),
+                    initial_value: project.name.clone(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
+                FormInput {
+                    label: Field::Path.label(),
+                    initial_value: project.path.clone(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
             ]),
             project: project,
         }

@@ -1,11 +1,24 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-pub struct FormPopup {
-    pub labels: Vec<&'static str>,
-    pub values: Vec<String>,
-    pub cursor_positions: Vec<usize>,
-    pub focused: usize,
+#[derive(Clone)]
+pub enum InputValidation {
+    Text(Vec<TextRule>),
+    // Number(Vec<NumberRule>),
 }
+
+#[derive(Clone)]
+pub enum TextRule {
+    NonEmpty,
+    OneOf(Vec<String>),
+}
+
+// #[derive(Clone)]
+// pub enum NumberRule {
+//     NonEmpty,
+//     NonZero,
+//     Min(f64),
+//     Max(f64),
+// }
 
 pub enum FormEvent {
     Continue,
@@ -13,21 +26,38 @@ pub enum FormEvent {
     Cancel,
 }
 
+pub struct FormInput {
+    pub label: &'static str,
+    pub initial_value: String,
+    pub validation: Option<InputValidation>,
+}
+
+pub struct FormPopup {
+    pub labels: Vec<&'static str>,
+    pub values: Vec<String>,
+    pub cursor_positions: Vec<usize>,
+    pub validations: Vec<Option<InputValidation>>,
+    pub focused: usize,
+}
+
 impl FormPopup {
-    pub fn new(fields: &[(&'static str, String)]) -> Self {
+    pub fn new(form_inputs: Vec<FormInput>) -> Self {
         let mut labels = Vec::new();
         let mut values = Vec::new();
         let mut cursor_positions = Vec::new();
-        for (l, v) in fields {
-            labels.push(*l);
-            values.push(v.clone());
-            cursor_positions.push(v.chars().count());
+        let mut validations = Vec::new();
+        for form_input in form_inputs {
+            labels.push(form_input.label);
+            values.push(form_input.initial_value.clone());
+            cursor_positions.push(form_input.initial_value.chars().count());
+            validations.push(form_input.validation);
         }
         Self {
             labels: labels,
             values: values,
-            focused: 0,
             cursor_positions: cursor_positions,
+            validations: validations,
+            focused: 0,
         }
     }
 
@@ -75,6 +105,26 @@ impl FormPopup {
 
     pub fn value(&self, i: usize) -> &str {
         &self.values[i]
+    }
+
+    pub fn validate(&self, i: usize) -> bool {
+        let value = self.value(i);
+        match &self.validations[i] {
+            Some(InputValidation::Text(rules)) => rules.iter().all(|r| match r {
+                TextRule::NonEmpty => !value.is_empty(),
+                TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
+            }),
+            // Some(InputValidation::Number(rules)) => match value.parse::<f64>() {
+            //     Err(_) => false,
+            //     Ok(n) => rules.iter().all(|r| match r {
+            //         NumberRule::NonEmpty => !value.is_empty(),
+            //         NumberRule::NonZero => n != 0.0,
+            //         NumberRule::Min(min) => value.is_empty() || n >= *min,
+            //         NumberRule::Max(max) => value.is_empty() || n <= *max,
+            //     }),
+            // },
+            None => true,
+        }
     }
 
     fn move_cursor_left(&mut self) {
