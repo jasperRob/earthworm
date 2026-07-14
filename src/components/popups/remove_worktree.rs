@@ -27,7 +27,7 @@ impl Popup for RemoveWorktreePopup {
                 self.project.clone(),
                 self.worktree.clone(),
             )),
-            KeyCode::Char('n') => PopupOutcome::Cancelled,
+            KeyCode::Esc | KeyCode::Char('n') => PopupOutcome::Cancelled,
             _ => PopupOutcome::Pending,
         }
     }
