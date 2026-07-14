@@ -43,6 +43,7 @@ pub struct Home {
     search: Option<String>,
     search_matches: Vec<usize>,
     search_cursor: usize,
+    projects: HashMap<Uuid, Project>,
     session_history: VecDeque<Session>,
 }
 
@@ -57,6 +58,7 @@ impl Home {
             search: None,
             search_matches: Vec::default(),
             search_cursor: usize::default(),
+            projects: HashMap::default(),
             session_history: VecDeque::new(),
         }
     }
@@ -189,6 +191,7 @@ impl Component for Home {
                 self.popup_state = PopupState::Open(Box::new(HelpPopup::new(self.keymaps.clone())))
             }
             Action::StateUpdated(projects, sessions) => {
+                self.projects = projects.clone();
                 self.rebuild_list(projects, sessions);
             }
             Action::CmdSelectNext => self.list_state.select_next(),
@@ -228,19 +231,19 @@ impl Component for Home {
                 self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
             }
             Action::CmdAddSession => {
-                let (project_id, path, name, worktree_name) = self
+                let (project, path, name, worktree_name) = self
                     .list_state
                     .selected()
                     .and_then(|i| self.list_entries.get(i))
                     .map(|entry| match entry {
                         ListEntry::Project(p) => {
-                            (Some(p.id.clone()), Some(p.path.clone()), None, None)
+                            (Some(p.clone()), Some(p.path.clone()), None, None)
                         }
                         ListEntry::ProjectSession(p, _) => {
-                            (Some(p.id.clone()), Some(p.path.clone()), None, None)
+                            (Some(p.clone()), Some(p.path.clone()), None, None)
                         }
                         ListEntry::AvailableWorktree(p, wt) => (
-                            Some(p.id.clone()),
+                            Some(p.clone()),
                             Some(wt.path.clone()),
                             Some(wt.name.clone()),
                             Some(wt.name.clone()),
@@ -249,10 +252,11 @@ impl Component for Home {
                     })
                     .unwrap_or((None, None, None, None));
                 self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new(
-                    project_id,
                     name,
                     worktree_name,
                     path,
+                    project,
+                    self.projects.values().cloned().collect(),
                 )))
             }
             Action::CmdEdit => {

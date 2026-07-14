@@ -4,7 +4,7 @@ use ratatui::{Frame, layout::Rect};
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormPopup},
+        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
         popups::{Popup, PopupOutcome, open_input_popup},
     },
     session::Session,
@@ -32,9 +32,17 @@ pub struct EditSessionPopup {
 impl EditSessionPopup {
     pub fn new(session: Session) -> Self {
         Self {
-            form: FormPopup::new(&[
-                (Field::Name.label(), String::default()),
-                (Field::Path.label(), String::default()),
+            form: FormPopup::new(vec![
+                FormInput {
+                    label: Field::Name.label(),
+                    initial_value: session.name.clone(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
+                FormInput {
+                    label: Field::Path.label(),
+                    initial_value: session.path.clone().unwrap_or_default(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                },
             ]),
             session,
         }
