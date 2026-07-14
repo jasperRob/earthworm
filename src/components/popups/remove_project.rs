@@ -23,7 +23,7 @@ impl Popup for RemoveProjectPopup {
             KeyCode::Char('y') => {
                 PopupOutcome::Submitted(Action::RemoveProject(self.project.clone()))
             }
-            KeyCode::Char('n') => PopupOutcome::Cancelled,
+            KeyCode::Esc | KeyCode::Char('n') => PopupOutcome::Cancelled,
             _ => PopupOutcome::Pending,
         }
     }

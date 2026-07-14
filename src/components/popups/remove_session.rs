@@ -23,7 +23,7 @@ impl Popup for RemoveSessionPopup {
             KeyCode::Char('y') => {
                 PopupOutcome::Submitted(Action::RemoveSession(self.session.clone()))
             }
-            KeyCode::Char('n') => PopupOutcome::Cancelled,
+            KeyCode::Esc | KeyCode::Char('n') => PopupOutcome::Cancelled,
             _ => PopupOutcome::Pending,
         }
     }
