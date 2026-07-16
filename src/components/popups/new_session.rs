@@ -69,7 +69,7 @@ impl NewSessionPopup {
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
                 },
             ]),
-            all_projects: all_projects,
+            all_projects,
         }
     }
 }
@@ -88,7 +88,7 @@ impl Popup for NewSessionPopup {
                 let worktree_name: String = self.form.value(Field::WorktreeName as usize).into();
                 let session = Session {
                     id: Uuid::new_v4(),
-                    project_id: project_id,
+                    project_id,
                     name: self.form.value(Field::Name as usize).into(),
                     path: Some(path.clone()).filter(|s| !s.is_empty()),
                     worktree: (!worktree_name.is_empty()).then(|| Worktree {

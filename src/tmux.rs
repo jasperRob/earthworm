@@ -55,7 +55,7 @@ pub fn new_tmux_session(session: &Session, project: Option<&Project>) -> color_e
     .ok_or_else(|| color_eyre::eyre::eyre!("no path found for session"))?;
 
     let mut cmd = std::process::Command::new("tmux");
-    cmd.args(["new-session", "-d", "-s", &tmux_session_name, "-c", &path]);
+    cmd.args(["new-session", "-d", "-s", &tmux_session_name, "-c", path]);
     let status = cmd.status()?;
     if !status.success() {
         return Err(color_eyre::eyre::eyre!("tmux new-sesssion failed"));

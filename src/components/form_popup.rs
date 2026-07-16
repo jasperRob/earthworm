@@ -55,8 +55,8 @@ impl FormPopup {
         Self {
             labels,
             values,
-            cursor_positions: cursor_positions,
-            validations: validations,
+            cursor_positions,
+            validations,
             focused: 0,
         }
     }

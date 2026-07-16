@@ -45,6 +45,7 @@ pub struct Home {
     search_cursor: usize,
     projects: HashMap<Uuid, Project>,
     session_history: VecDeque<Session>,
+    session_history_index: usize,
 }
 
 impl Home {
@@ -60,6 +61,7 @@ impl Home {
             search_cursor: usize::default(),
             projects: HashMap::default(),
             session_history: VecDeque::new(),
+            session_history_index: usize::default(),
         }
     }
 
@@ -101,6 +103,16 @@ impl Home {
         list_entries.extend(orphaned.into_iter().map(|s| ListEntry::Session(s.clone())));
         self.list_entries = list_entries;
 
+        let current_id = self
+            .session_history
+            .get(self.session_history_index)
+            .map(|s| s.id);
+        self.session_history
+            .retain(|s| sessions.contains_key(&s.id));
+        self.session_history_index = current_id
+            .and_then(|id| self.session_history.iter().position(|s| s.id == id))
+            .unwrap_or_else(|| self.session_history.len().saturating_sub(1));
+
         if self.list_entries.is_empty() {
             self.list_state.select(None);
         } else {
@@ -111,16 +123,31 @@ impl Home {
     }
 
     fn push_to_session_history(&mut self, session: Session) {
+        // Ensure each session appears only once, as the most-recent entry:
+        // drop any prior occurrence (covers both an identical last entry and
+        // older duplicates), then re-add at the back.
+        self.session_history.retain(|s| s.id != session.id);
         self.session_history.push_back(session);
-        if self.session_history.len() > 2 {
-            self.session_history.pop_front();
+        self.session_history_index = self.session_history.len() - 1;
+    }
+
+    fn select_session_history(&mut self) {
+        let Some(move_to_session) = self.session_history.get(self.session_history_index) else {
+            return;
+        };
+        let list_state_index = self.list_entries.iter().position(|v| match v {
+            ListEntry::ProjectSession(_, s) | ListEntry::Session(s) => s.id == move_to_session.id,
+            ListEntry::Project(_) | ListEntry::AvailableWorktree(_, _) => false,
+        });
+        if list_state_index.is_some() {
+            self.list_state.select(list_state_index);
         }
     }
 }
 
 impl Component for Home {
     fn is_capturing_input(&self) -> bool {
-        return !matches!(self.popup_state, PopupState::Closed) || self.search_is_capturing;
+        !matches!(self.popup_state, PopupState::Closed) || self.search_is_capturing
     }
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         match &mut self.popup_state {
@@ -196,36 +223,28 @@ impl Component for Home {
             }
             Action::CmdSelectNext => self.list_state.select_next(),
             Action::CmdSelectPrev => self.list_state.select_previous(),
-            Action::CmdJumpTop => {
-                if !self.list_entries.is_empty() {
-                    self.list_state.select(Some(0));
-                }
+            Action::CmdJumpTop if !self.list_entries.is_empty() => {
+                self.list_state.select(Some(0));
             }
-            Action::CmdJumpBottom => {
-                if !self.list_entries.is_empty() {
-                    self.list_state.select(Some(self.list_entries.len() - 1));
-                }
+            Action::CmdJumpBottom if !self.list_entries.is_empty() => {
+                self.list_state.select(Some(self.list_entries.len() - 1));
             }
             Action::CmdStartSearch => {
                 self.search = Some(String::new());
                 self.search_is_capturing = true;
             }
-            Action::CmdSearchNext => {
-                if !self.search_matches.is_empty() {
-                    self.search_cursor = (self.search_cursor + 1) % self.search_matches.len();
-                    self.list_state
-                        .select(Some(self.search_matches[self.search_cursor]));
-                }
+            Action::CmdSearchNext if !self.search_matches.is_empty() => {
+                self.search_cursor = (self.search_cursor + 1) % self.search_matches.len();
+                self.list_state
+                    .select(Some(self.search_matches[self.search_cursor]));
             }
-            Action::CmdSearchPrev => {
-                if !self.search_matches.is_empty() {
-                    self.search_cursor = self
-                        .search_cursor
-                        .checked_sub(1)
-                        .unwrap_or(self.search_matches.len() - 1);
-                    self.list_state
-                        .select(Some(self.search_matches[self.search_cursor]));
-                }
+            Action::CmdSearchPrev if !self.search_matches.is_empty() => {
+                self.search_cursor = self
+                    .search_cursor
+                    .checked_sub(1)
+                    .unwrap_or(self.search_matches.len() - 1);
+                self.list_state
+                    .select(Some(self.search_matches[self.search_cursor]));
             }
             Action::CmdAddProject => {
                 self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
@@ -260,47 +279,47 @@ impl Component for Home {
                 )))
             }
             Action::CmdEdit => {
-                if let Some(i) = self.list_state.selected() {
-                    if let Some(entry) = self.list_entries.get(i) {
-                        match entry {
-                            ListEntry::Project(p) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(EditProjectPopup::new(p.clone())))
-                            }
-                            ListEntry::ProjectSession(_, s) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
-                            }
-                            ListEntry::AvailableWorktree(_, _) => {}
-                            ListEntry::Session(s) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
-                            }
+                if let Some(i) = self.list_state.selected()
+                    && let Some(entry) = self.list_entries.get(i)
+                {
+                    match entry {
+                        ListEntry::Project(p) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(EditProjectPopup::new(p.clone())))
+                        }
+                        ListEntry::ProjectSession(_, s) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
+                        }
+                        ListEntry::AvailableWorktree(_, _) => {}
+                        ListEntry::Session(s) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
                         }
                     }
                 }
             }
             Action::CmdDeleteItem => {
-                if let Some(i) = self.list_state.selected() {
-                    if let Some(entry) = self.list_entries.get(i) {
-                        match entry {
-                            ListEntry::Project(p) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(RemoveProjectPopup::new(p.clone())));
-                            }
-                            ListEntry::ProjectSession(_, s) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
-                            }
-                            ListEntry::Session(s) => {
-                                self.popup_state =
-                                    PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
-                            }
-                            ListEntry::AvailableWorktree(p, wt) => {
-                                self.popup_state = PopupState::Open(Box::new(
-                                    RemoveWorktreePopup::new(wt.clone(), p.clone()),
-                                ));
-                            }
+                if let Some(i) = self.list_state.selected()
+                    && let Some(entry) = self.list_entries.get(i)
+                {
+                    match entry {
+                        ListEntry::Project(p) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(RemoveProjectPopup::new(p.clone())));
+                        }
+                        ListEntry::ProjectSession(_, s) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                        }
+                        ListEntry::Session(s) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                        }
+                        ListEntry::AvailableWorktree(p, wt) => {
+                            self.popup_state = PopupState::Open(Box::new(
+                                RemoveWorktreePopup::new(wt.clone(), p.clone()),
+                            ));
                         }
                     }
                 }
@@ -310,18 +329,18 @@ impl Component for Home {
             }
             Action::CmdAttach => {
                 let mut session: Option<Session> = None;
-                if let Some(i) = self.list_state.selected() {
-                    if let Some(entry) = self.list_entries.get(i) {
-                        match entry {
-                            ListEntry::Project(_) => {}
-                            ListEntry::ProjectSession(_, s) => {
-                                session = Some(s.clone());
-                            }
-                            ListEntry::Session(s) => {
-                                session = Some(s.clone());
-                            }
-                            ListEntry::AvailableWorktree(_, _) => {}
+                if let Some(i) = self.list_state.selected()
+                    && let Some(entry) = self.list_entries.get(i)
+                {
+                    match entry {
+                        ListEntry::Project(_) => {}
+                        ListEntry::ProjectSession(_, s) => {
+                            session = Some(s.clone());
                         }
+                        ListEntry::Session(s) => {
+                            session = Some(s.clone());
+                        }
+                        ListEntry::AvailableWorktree(_, _) => {}
                     }
                 }
                 if let Some(s) = session {
@@ -329,39 +348,23 @@ impl Component for Home {
                     return Ok(Some(Action::AttachSession(s)));
                 }
             }
-            Action::CmdSelectPrevSession => {
-                if self.session_history.len() >= 2 {
-                    let prev_prev = &self.session_history[self.session_history.len() - 2];
-                    let index = self
-                        .list_entries
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, v)| match v {
-                            ListEntry::Project(_) => None,
-                            ListEntry::ProjectSession(_, s) => {
-                                if s.id == prev_prev.id {
-                                    Some(i)
-                                } else {
-                                    None
-                                }
-                            }
-                            ListEntry::Session(s) => {
-                                if s.id == prev_prev.id {
-                                    Some(i)
-                                } else {
-                                    None
-                                }
-                            }
-                            ListEntry::AvailableWorktree(_, _) => None,
-                        })
-                        .next();
-                    self.list_state.select(index);
+            Action::CmdNextSessionHistory => {
+                if self.session_history_index + 1 < self.session_history.len() {
+                    self.session_history_index += 1;
                 }
+                self.select_session_history();
+            }
+            Action::CmdPrevSessionHistory => {
+                if self.session_history_index > 0 {
+                    self.session_history_index -= 1;
+                }
+                self.select_session_history();
             }
             _ => {}
         }
         Ok(None)
     }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let title_bar = Paragraph::new(" earthworm").block(Block::default()).style(
             Style::default()

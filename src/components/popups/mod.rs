@@ -42,10 +42,7 @@ pub trait Popup {
 
 pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form: &FormPopup) {
     let height = (2 * form.labels.len() - 1) as u16 + 4;
-    let popup = area.centered(
-        Constraint::Percentage(40),
-        Constraint::Length(height as u16),
-    );
+    let popup = area.centered(Constraint::Percentage(40), Constraint::Length(height));
     // clears out any background in the area before rendering the popup
     frame.render_widget(Clear, popup);
     frame.render_widget(Block::bordered().title(title), popup);

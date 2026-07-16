@@ -13,13 +13,13 @@ pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
     for line in stdout.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
             current_path = Some(path.to_string());
-        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
-            if let Some(path) = current_path.take() {
-                worktrees.push(Worktree {
-                    name: branch.to_string(),
-                    path,
-                })
-            }
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
+            && let Some(path) = current_path.take()
+        {
+            worktrees.push(Worktree {
+                name: branch.to_string(),
+                path,
+            })
         }
     }
 
@@ -45,7 +45,7 @@ pub fn create_worktree(
                 repo_path,
                 "worktree",
                 "add",
-                &worktree_path,
+                worktree_path,
                 worktree_name,
             ])
             .status()?
@@ -58,7 +58,7 @@ pub fn create_worktree(
                 "add",
                 "-b",
                 worktree_name,
-                &worktree_path,
+                worktree_path,
             ])
             .status()?
     };
@@ -70,7 +70,7 @@ pub fn create_worktree(
 
 pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> color_eyre::Result<()> {
     let status = std::process::Command::new("git")
-        .args(["-C", repo_path, "worktree", "remove", &worktree_path])
+        .args(["-C", repo_path, "worktree", "remove", worktree_path])
         .status()?;
     if !status.success() {
         return Err(color_eyre::eyre::eyre!("git worktree remove failed"));
