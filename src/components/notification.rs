@@ -19,16 +19,14 @@ impl Notification {}
 
 impl Component for Notification {
     fn is_capturing_input(&self) -> bool {
-        return false;
+        false
     }
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
         match action {
-            Action::Tick => {
-                if self.msg.is_some() {
-                    self.ticks_remaining = self.ticks_remaining.saturating_sub(1);
-                    if self.ticks_remaining == 0 {
-                        self.msg = None;
-                    }
+            Action::Tick if self.msg.is_some() => {
+                self.ticks_remaining = self.ticks_remaining.saturating_sub(1);
+                if self.ticks_remaining == 0 {
+                    self.msg = None;
                 }
             }
             Action::Error(msg) => {

@@ -17,7 +17,8 @@
       "<Space><d>": "CmdDeleteItem",
       "<Space><a>": "CmdAttach",
       "<Space><e>": "CmdEdit",
-      "<Space><b>": "CmdSelectPrevSession",
+      "<Ctrl-i>": "CmdNextSessionHistory",
+      "<Ctrl-o>": "CmdPrevSessionHistory",
     },
   }
 }

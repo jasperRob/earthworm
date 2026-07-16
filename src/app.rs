@@ -221,16 +221,16 @@ impl App {
                         }
                     }
 
-                    if let Err(e) = new_tmux_session(&session, project) {
+                    if let Err(e) = new_tmux_session(session, project) {
                         self.dispatch_error(e);
                         return Ok(());
                     }
 
                     self.sessions.insert(session.id, session.clone());
-                    if let Some(project_id) = session.project_id {
-                        if let Some(project) = self.projects.get_mut(&project_id) {
-                            project.sessions.push(session.id);
-                        }
+                    if let Some(project_id) = session.project_id
+                        && let Some(project) = self.projects.get_mut(&project_id)
+                    {
+                        project.sessions.push(session.id);
                     }
                     self.fetch_and_map_tmux_sessions()?;
                     self.persist_state();
@@ -242,9 +242,8 @@ impl App {
                     let mut project: Option<&Project> = None;
                     if let Some(project_id) = session.project_id {
                         project = self.projects.get(&project_id);
-                        match project {
-                            None => self.dispatch_error("project is None"),
-                            _ => {}
+                        if project.is_none() {
+                            self.dispatch_error("project is None");
                         }
                     }
                     if let Err(e) = attach_tmux_session(session, project) {
@@ -261,19 +260,18 @@ impl App {
                     let mut project: Option<&Project> = None;
                     if let Some(project_id) = session.project_id {
                         project = self.projects.get(&project_id);
-                        match project {
-                            None => self.dispatch_error("project is None"),
-                            _ => {}
+                        if project.is_none() {
+                            self.dispatch_error("project is None");
                         }
                     }
                     if let Err(e) = kill_tmux_session(session, project) {
                         self.action_tx.send(Action::Error(e.to_string()))?;
                     }
                     self.sessions.remove(&session.id);
-                    if let Some(project_id) = session.project_id {
-                        if let Some(project) = self.projects.get_mut(&project_id) {
-                            project.sessions.retain(|id| *id != session.id);
-                        }
+                    if let Some(project_id) = session.project_id
+                        && let Some(project) = self.projects.get_mut(&project_id)
+                    {
+                        project.sessions.retain(|id| *id != session.id);
                     }
                     self.fetch_and_map_tmux_sessions()?;
                     self.persist_state();
@@ -281,12 +279,9 @@ impl App {
                     self.action_tx.send(Action::ClearScreen)?;
                 }
                 Action::RemoveWorktree(ref project, ref worktree) => {
-                    match remove_worktree(&project.path, &worktree.path) {
-                        Err(e) => {
-                            self.action_tx.send(Action::Error(e.to_string()))?;
-                            return Ok(());
-                        }
-                        _ => {}
+                    if let Err(e) = remove_worktree(&project.path, &worktree.path) {
+                        self.action_tx.send(Action::Error(e.to_string()))?;
+                        return Ok(());
                     }
                     self.fetch_and_map_tmux_sessions()?;
                     self.persist_state();

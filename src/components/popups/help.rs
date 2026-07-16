@@ -27,7 +27,8 @@ const DISPLAY_ORDER: &[Action] = &[
     Action::CmdDeleteItem,
     Action::CmdAttach,
     Action::CmdEdit,
-    Action::CmdSelectPrevSession,
+    Action::CmdNextSessionHistory,
+    Action::CmdPrevSessionHistory,
 ];
 
 pub struct HelpPopup {
@@ -43,10 +44,7 @@ impl HelpPopup {
 impl Popup for HelpPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
         match key.code {
-            KeyCode::Char(c) => match c {
-                'q' => PopupOutcome::Cancelled,
-                _ => PopupOutcome::Pending,
-            },
+            KeyCode::Char('q') => PopupOutcome::Cancelled,
             KeyCode::Esc => PopupOutcome::Cancelled,
             _ => PopupOutcome::Pending,
         }
