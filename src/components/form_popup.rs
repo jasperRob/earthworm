@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 #[derive(Clone)]
 pub enum InputValidation {
     Text(Vec<TextRule>),
-    // Number(Vec<NumberRule>),
+    Boolean,
 }
 
 #[derive(Clone)]
@@ -12,59 +12,65 @@ pub enum TextRule {
     OneOf(Vec<String>),
 }
 
-// #[derive(Clone)]
-// pub enum NumberRule {
-//     NonEmpty,
-//     NonZero,
-//     Min(f64),
-//     Max(f64),
-// }
-
 pub enum FormEvent {
     Continue,
     Submit,
     Cancel,
 }
 
+#[derive(Clone)]
 pub struct FormInput {
-    pub label: &'static str,
+    pub label: String,
     pub initial_value: String,
     pub validation: Option<InputValidation>,
+    pub dependant_on: Option<i32>,
+}
+
+#[derive(Clone)]
+pub struct FormInputState {
+    pub form_input: String,
+    pub value: String,
+    pub cursor_position: usize,
+    pub is_valid: bool,
+    pub hidden: bool,
 }
 
 pub struct FormPopup {
-    pub labels: Vec<&'static str>,
-    pub values: Vec<String>,
-    pub cursor_positions: Vec<usize>,
-    pub validations: Vec<Option<InputValidation>>,
+    pub form_inputs: Vec<FormInput>,
     pub focused: usize,
 }
 
 impl FormPopup {
     pub fn new(form_inputs: Vec<FormInput>) -> Self {
-        let mut labels = Vec::new();
-        let mut values = Vec::new();
         let mut cursor_positions = Vec::new();
-        let mut validations = Vec::new();
-        for form_input in form_inputs {
-            labels.push(form_input.label);
-            values.push(form_input.initial_value.clone());
-            cursor_positions.push(form_input.initial_value.chars().count());
-            validations.push(form_input.validation);
+        for form_input in form_inputs.clone() {
+            cursor_positions.push(form_input.value.chars().count());
         }
         Self {
-            labels,
-            values,
+            form_inputs,
             cursor_positions,
-            validations,
             focused: 0,
         }
+    }
+
+    pub fn non_hidden_inputs(&self) -> Vec<&FormInput> {
+        self.form_inputs.iter().filter(|i| !i.hidden).collect()
+    }
+
+    fn focused_index(&self) -> usize {
+        self.form_inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| !i.hidden)
+            .map(|(idx, _)| idx)
+            .nth(self.focused)
+            .expect("focused is a valid non-hidden index")
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> FormEvent {
         match key.code {
             KeyCode::Tab | KeyCode::Down => {
-                self.focused = (self.focused + 1) % self.values.len();
+                self.focused = (self.focused + 1) % self.non_hidden_inputs().len();
                 FormEvent::Continue
             }
             KeyCode::BackTab | KeyCode::Up => {
@@ -72,8 +78,14 @@ impl FormPopup {
                 FormEvent::Continue
             }
             KeyCode::Char(c) => {
-                if self.values[self.focused].is_char_boundary(self.cursor_positions[self.focused]) {
-                    self.values[self.focused].insert(self.cursor_positions[self.focused], c);
+                if self.non_hidden_inputs()[self.focused]
+                    .value
+                    .is_char_boundary(self.cursor_positions[self.focused])
+                {
+                    let idx = self.focused_index();
+                    self.form_inputs[idx]
+                        .value
+                        .insert(self.cursor_positions[self.focused], c);
                     self.move_cursor_right();
                 }
                 FormEvent::Continue
@@ -81,10 +93,13 @@ impl FormPopup {
             KeyCode::Backspace => {
                 if self.cursor_positions[self.focused] > 0 {
                     self.move_cursor_left();
-                    let idx = self.cursor_positions[self.focused];
-                    let s = &self.values[self.focused];
-                    if idx < s.len() && s.is_char_boundary(idx) {
-                        self.values[self.focused].remove(idx);
+                    let idx = self.focused_index();
+                    let cursor_idx = self.cursor_positions[idx];
+                    let s = &self.non_hidden_inputs()[self.focused].value;
+                    if cursor_idx < s.len() && s.is_char_boundary(cursor_idx) {
+                        self.non_hidden_inputs()[self.focused]
+                            .value
+                            .remove(cursor_idx);
                     }
                 }
                 FormEvent::Continue
@@ -104,25 +119,17 @@ impl FormPopup {
     }
 
     pub fn value(&self, i: usize) -> &str {
-        &self.values[i]
+        &self.form_inputs[i].value
     }
 
     pub fn validate(&self, i: usize) -> bool {
         let value = self.value(i);
-        match &self.validations[i] {
+        match &self.form_inputs[i].validation {
             Some(InputValidation::Text(rules)) => rules.iter().all(|r| match r {
                 TextRule::NonEmpty => !value.is_empty(),
                 TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
             }),
-            // Some(InputValidation::Number(rules)) => match value.parse::<f64>() {
-            //     Err(_) => false,
-            //     Ok(n) => rules.iter().all(|r| match r {
-            //         NumberRule::NonEmpty => !value.is_empty(),
-            //         NumberRule::NonZero => n != 0.0,
-            //         NumberRule::Min(min) => value.is_empty() || n >= *min,
-            //         NumberRule::Max(max) => value.is_empty() || n <= *max,
-            //     }),
-            // },
+            Some(InputValidation::Boolean) => value == "true" || value == "false",
             None => true,
         }
     }

@@ -52,7 +52,8 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
     });
 
     let mut constraints: Vec<Constraint> = vec![Constraint::Fill(1)];
-    for _ in 0..form.labels.len() {
+    // TODO: This should only iterate non-hidden inputs
+    for _ in 0..form.non_hidden_inputs().len() {
         constraints.push(Constraint::Length(1));
         constraints.push(Constraint::Length(1));
     }
@@ -63,10 +64,13 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
 
     let mut active_area = Rect::default();
     let mut active_label = String::default();
-    for (i, label) in form.labels.iter().enumerate() {
+    for (i, label) in form.non_hidden_inputs().iter().enumerate() {
         let is_focused = form.focused == i;
+        let label = form.non_hidden_inputs()[i].label;
         let value = form.value(i);
         let is_valid = form.validate(i);
+        let is_valid = form.non_hidden_inputs()[i].is_valid;
+        // TODO: check if input is hidden before doing the rest of this
         let widget = labeled_input(label, value, is_focused, is_valid);
         let area = areas[(i * 2) + 1];
         frame.render_widget(widget, area);

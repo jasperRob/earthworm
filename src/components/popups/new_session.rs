@@ -14,10 +14,12 @@ use crate::{
 };
 
 enum Field {
-    Project = 0,
-    Name = 1,
-    WorktreeName = 2,
-    Path = 3,
+    Project,
+    Name,
+    UseCustomWorktreeName,
+    WorktreeName,
+    UseCustomPath,
+    Path,
 }
 
 impl Field {
@@ -25,7 +27,9 @@ impl Field {
         match self {
             Self::Project => "Project",
             Self::Name => "Name",
+            Self::UseCustomWorktreeName => "Use Custom Worktree Name?",
             Self::WorktreeName => "Worktree Name",
+            Self::UseCustomPath => "Use Custom Path?",
             Self::Path => "Path",
         }
     }
@@ -48,25 +52,47 @@ impl NewSessionPopup {
             form: FormPopup::new(vec![
                 FormInput {
                     label: Field::Project.label(),
-                    initial_value: init_project.clone().map(|p| p.name).unwrap_or_default(),
+                    value: init_project.clone().map(|p| p.name).unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::OneOf(
                         all_projects.iter().map(|p| p.name.clone()).collect(),
                     )])),
+                    dependant_on: None,
+                    hidden: false,
                 },
                 FormInput {
                     label: Field::Name.label(),
-                    initial_value: name.unwrap_or_default(),
+                    value: name.unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: None,
+                    hidden: false,
+                },
+                FormInput {
+                    label: Field::UseCustomWorktreeName.label(),
+                    value: false.to_string(),
+                    validation: Some(InputValidation::Boolean),
+                    dependant_on: None,
+                    hidden: false,
                 },
                 FormInput {
                     label: Field::WorktreeName.label(),
-                    initial_value: worktree_name.unwrap_or_default(),
+                    value: worktree_name.unwrap_or_default(),
                     validation: None,
+                    dependant_on: Some(Field::UseCustomWorktreeName as i32),
+                    hidden: true,
                 },
                 FormInput {
-                    label: Field::Path.label(),
-                    initial_value: path.unwrap_or_default(),
+                    label: Field::UseCustomPath.label(),
+                    value: false.to_string(),
+                    validation: Some(InputValidation::Boolean),
+                    dependant_on: None,
+                    hidden: false,
+                },
+                FormInput {
+                    label: Field::Path.label().to_string(),
+                    value: path.unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: Some(Field::UseCustomPath as i32),
+                    hidden: true,
                 },
             ]),
             all_projects,
