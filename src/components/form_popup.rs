@@ -63,11 +63,11 @@ impl FormPopup {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> FormEvent {
         match key.code {
-            KeyCode::Tab | KeyCode::Up => {
+            KeyCode::Tab | KeyCode::Down => {
                 self.focused = (self.focused + 1) % self.values.len();
                 FormEvent::Continue
             }
-            KeyCode::BackTab | KeyCode::Down => {
+            KeyCode::BackTab | KeyCode::Up => {
                 self.focused = self.focused.saturating_sub(1);
                 FormEvent::Continue
             }
