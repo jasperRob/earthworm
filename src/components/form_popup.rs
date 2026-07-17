@@ -28,7 +28,7 @@ pub struct FormInput {
 
 #[derive(Clone)]
 pub struct FormInputState {
-    pub form_input: String,
+    pub form_input: FormInput,
     pub value: String,
     pub cursor_position: usize,
     pub is_valid: bool,
@@ -36,41 +36,32 @@ pub struct FormInputState {
 }
 
 pub struct FormPopup {
-    pub form_inputs: Vec<FormInput>,
+    pub form_input_states: Vec<FormInputState>,
     pub focused: usize,
 }
 
 impl FormPopup {
     pub fn new(form_inputs: Vec<FormInput>) -> Self {
-        let mut cursor_positions = Vec::new();
+        let mut form_input_states = Vec::new();
         for form_input in form_inputs.clone() {
-            cursor_positions.push(form_input.value.chars().count());
+            form_input_states.push(FormInputState {
+                form_input: form_input.clone(),
+                value: form_input.initial_value.clone(),
+                cursor_position: form_input.initial_value.len(),
+                is_valid: false,
+                hidden: false,
+            })
         }
         Self {
-            form_inputs,
-            cursor_positions,
+            form_input_states,
             focused: 0,
         }
-    }
-
-    pub fn non_hidden_inputs(&self) -> Vec<&FormInput> {
-        self.form_inputs.iter().filter(|i| !i.hidden).collect()
-    }
-
-    fn focused_index(&self) -> usize {
-        self.form_inputs
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| !i.hidden)
-            .map(|(idx, _)| idx)
-            .nth(self.focused)
-            .expect("focused is a valid non-hidden index")
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> FormEvent {
         match key.code {
             KeyCode::Tab | KeyCode::Down => {
-                self.focused = (self.focused + 1) % self.non_hidden_inputs().len();
+                self.focused = (self.focused + 1) % self.form_input_states.len();
                 FormEvent::Continue
             }
             KeyCode::BackTab | KeyCode::Up => {
@@ -78,28 +69,30 @@ impl FormPopup {
                 FormEvent::Continue
             }
             KeyCode::Char(c) => {
-                if self.non_hidden_inputs()[self.focused]
+                let focused_input_state = self.form_input_states[self.focused];
+                if focused_input_state
                     .value
-                    .is_char_boundary(self.cursor_positions[self.focused])
+                    .is_char_boundary(focused_input_state.cursor_position)
                 {
-                    let idx = self.focused_index();
-                    self.form_inputs[idx]
+                    focused_input_state
                         .value
-                        .insert(self.cursor_positions[self.focused], c);
+                        .insert(focused_input_state.cursor_position, c);
                     self.move_cursor_right();
                 }
                 FormEvent::Continue
             }
             KeyCode::Backspace => {
-                if self.cursor_positions[self.focused] > 0 {
+                let focused_input_state = self.form_input_states[self.focused];
+                if focused_input_state.cursor_position > 0 {
                     self.move_cursor_left();
-                    let idx = self.focused_index();
-                    let cursor_idx = self.cursor_positions[idx];
-                    let s = &self.non_hidden_inputs()[self.focused].value;
-                    if cursor_idx < s.len() && s.is_char_boundary(cursor_idx) {
-                        self.non_hidden_inputs()[self.focused]
+                    if focused_input_state.cursor_position < focused_input_state.value.len()
+                        && focused_input_state
                             .value
-                            .remove(cursor_idx);
+                            .is_char_boundary(focused_input_state.cursor_position)
+                    {
+                        focused_input_state
+                            .value
+                            .remove(focused_input_state.cursor_position);
                     }
                 }
                 FormEvent::Continue
@@ -118,33 +111,38 @@ impl FormPopup {
         }
     }
 
-    pub fn value(&self, i: usize) -> &str {
-        &self.form_inputs[i].value
-    }
-
-    pub fn validate(&self, i: usize) -> bool {
-        let value = self.value(i);
-        match &self.form_inputs[i].validation {
-            Some(InputValidation::Text(rules)) => rules.iter().all(|r| match r {
-                TextRule::NonEmpty => !value.is_empty(),
-                TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
-            }),
-            Some(InputValidation::Boolean) => value == "true" || value == "false",
-            None => true,
-        }
+    pub fn validate(&self) {
+        self.form_input_states.iter().for_each(|input_state| {
+            input_state.is_valid = match input_state.form_input.validation {
+                Some(InputValidation::Text(rules)) => rules.iter().all(|r| match r {
+                    TextRule::NonEmpty => !input_state.value.is_empty(),
+                    TextRule::OneOf(options) => {
+                        input_state.value.is_empty()
+                            || options.iter().any(|o| o == input_state.value)
+                    }
+                }),
+                Some(InputValidation::Boolean) => {
+                    input_state.value == "true" || input_state.value == "false"
+                }
+                None => true,
+            }
+        });
     }
 
     fn move_cursor_left(&mut self) {
-        let cursor_moved_left = self.cursor_positions[self.focused].saturating_sub(1);
-        self.cursor_positions[self.focused] = self.clamp_cursor(cursor_moved_left);
+        let focused_input_state = self.form_input_states[self.focused];
+        let cursor_moved_left = focused_input_state.cursor_position.saturating_sub(1);
+        focused_input_state.cursor_position = self.clamp_cursor(cursor_moved_left);
     }
 
     fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.cursor_positions[self.focused].saturating_add(1);
-        self.cursor_positions[self.focused] = self.clamp_cursor(cursor_moved_right);
+        let focused_input_state = self.form_input_states[self.focused];
+        let cursor_moved_right = focused_input_state.cursor_position.saturating_add(1);
+        focused_input_state.cursor_position = self.clamp_cursor(cursor_moved_right);
     }
 
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.values[self.focused].chars().count())
+        let focused_input_state = self.form_input_states[self.focused];
+        new_cursor_pos.clamp(0, focused_input_state.value.chars().count())
     }
 }

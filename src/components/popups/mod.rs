@@ -68,9 +68,7 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
         let is_focused = form.focused == i;
         let label = form.non_hidden_inputs()[i].label;
         let value = form.value(i);
-        let is_valid = form.validate(i);
         let is_valid = form.non_hidden_inputs()[i].is_valid;
-        // TODO: check if input is hidden before doing the rest of this
         let widget = labeled_input(label, value, is_focused, is_valid);
         let area = areas[(i * 2) + 1];
         frame.render_widget(widget, area);
@@ -85,13 +83,13 @@ pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form:
             + 1
             + active_label.len() as u16
             + 2
-            + form.cursor_positions[form.focused] as u16,
+            + form.form_inputs[form.focused_index()].cursor_position as u16,
         active_area.y,
     ));
 }
 
 pub(super) fn labeled_input<'a>(
-    label: &'a str,
+    label: String,
     value: &'a str,
     is_focused: bool,
     is_valid: bool,
