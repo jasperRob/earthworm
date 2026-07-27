@@ -105,7 +105,7 @@ impl Form {
             form_input_states.push(FormInputState {
                 form_input: form_input.clone(),
                 value: form_input.initial_value.clone(),
-                cursor_position: form_input.initial_value.len(),
+                cursor_position: form_input.initial_value.chars().count(), // no non-ascii support
                 is_valid: false,
                 hidden: false,
             })
@@ -148,7 +148,7 @@ impl Form {
                 FormEvent::Continue
             }
             KeyCode::BackTab | KeyCode::Up => {
-                let mut prev = self.focused - 1;
+                let mut prev = self.focused;
                 while prev > 0 {
                     prev -= 1;
                     if !self.form_input_states[prev].hidden {
@@ -351,7 +351,7 @@ impl Form {
                 && let Some(value) = values.get(dependant_on.0)
             {
                 input_state.hidden =
-                    value == "true" && dependant_on.1 || value == "false" && !dependant_on.1;
+                    !(value == "true" && dependant_on.1 || value == "false" && !dependant_on.1);
             }
         });
     }
