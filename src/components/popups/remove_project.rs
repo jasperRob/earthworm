@@ -1,35 +1,43 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::{
     action::Action,
-    components::popups::{Popup, PopupOutcome, open_confirmation_popup},
+    components::{
+        form::{Form, FormEvent},
+        popups::{Popup, PopupOutcome},
+    },
     project::Project,
 };
 
 pub struct RemoveProjectPopup {
+    form: Form,
     project: Project,
 }
 
 impl RemoveProjectPopup {
     pub fn new(project: Project) -> Self {
-        Self { project }
+        Self {
+            form: Form::confirmation()
+                .title("Remove Project")
+                .body(format!("Remove \"{}\"?", project.name)),
+            project,
+        }
     }
 }
 
 impl Popup for RemoveProjectPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
-        match key.code {
-            KeyCode::Char('y') => {
+        match self.form.handle_key(key) {
+            FormEvent::Submit => {
                 PopupOutcome::Submitted(Action::RemoveProject(self.project.clone()))
             }
-            KeyCode::Esc | KeyCode::Char('n') => PopupOutcome::Cancelled,
-            _ => PopupOutcome::Pending,
+            FormEvent::Cancel => PopupOutcome::Cancelled,
+            FormEvent::Continue => PopupOutcome::Pending,
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        let body = format!("Remove \"{}\"?", self.project.name);
-        open_confirmation_popup(frame, area, "Remove Project", &body);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }

@@ -1,35 +1,43 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::{
     action::Action,
-    components::popups::{Popup, PopupOutcome, open_confirmation_popup},
+    components::{
+        form::{Form, FormEvent},
+        popups::{Popup, PopupOutcome},
+    },
     session::Session,
 };
 
 pub struct RemoveSessionPopup {
+    form: Form,
     session: Session,
 }
 
 impl RemoveSessionPopup {
     pub fn new(session: Session) -> Self {
-        Self { session }
+        Self {
+            form: Form::confirmation()
+                .title("Kill Session")
+                .body(format!("Kill \"{}\"?", session.name)),
+            session,
+        }
     }
 }
 
 impl Popup for RemoveSessionPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
-        match key.code {
-            KeyCode::Char('y') => {
+        match self.form.handle_key(key) {
+            FormEvent::Submit => {
                 PopupOutcome::Submitted(Action::RemoveSession(self.session.clone()))
             }
-            KeyCode::Esc | KeyCode::Char('n') => PopupOutcome::Cancelled,
-            _ => PopupOutcome::Pending,
+            FormEvent::Cancel => PopupOutcome::Cancelled,
+            FormEvent::Continue => PopupOutcome::Pending,
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        let body = format!("Kill \"{}\"?", self.session.name);
-        open_confirmation_popup(frame, area, "Kill Session", &body);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }

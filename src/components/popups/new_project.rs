@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
-        popups::{Popup, PopupOutcome, open_input_popup},
+        form::{Form, FormEvent, FormInput, InputValidation, TextRule},
+        popups::{Popup, PopupOutcome},
     },
     project::Project,
 };
@@ -26,22 +26,24 @@ impl Field {
 }
 
 pub struct NewProjectPopup {
-    form: FormPopup,
+    form: Form,
 }
 
 impl NewProjectPopup {
     pub fn new() -> Self {
         Self {
-            form: FormPopup::new(vec![
+            form: Form::standard().title("New Project").inputs(vec![
                 FormInput {
-                    label: Field::Name.label(),
+                    label: Field::Name.label().to_string(),
                     initial_value: String::default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: None,
                 },
                 FormInput {
-                    label: Field::Path.label(),
+                    label: Field::Path.label().to_string(),
                     initial_value: String::default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: None,
                 },
             ]),
         }
@@ -52,8 +54,8 @@ impl Popup for NewProjectPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
-                let name: String = self.form.value(Field::Name as usize).into();
-                let path: String = self.form.value(Field::Path as usize).into();
+                let name: String = self.form.value(Field::Name as usize);
+                let path: String = self.form.value(Field::Path as usize);
                 let project = Project {
                     id: Uuid::new_v4(),
                     name,
@@ -69,7 +71,7 @@ impl Popup for NewProjectPopup {
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        open_input_popup(frame, area, "New Project", &self.form);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }

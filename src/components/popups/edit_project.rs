@@ -4,8 +4,8 @@ use ratatui::{Frame, layout::Rect};
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
-        popups::{Popup, PopupOutcome, open_input_popup},
+        form::{Form, FormEvent, FormInput, InputValidation, TextRule},
+        popups::{Popup, PopupOutcome},
     },
     project::Project,
 };
@@ -25,23 +25,25 @@ impl Field {
 }
 
 pub struct EditProjectPopup {
-    form: FormPopup,
+    form: Form,
     project: Project,
 }
 
 impl EditProjectPopup {
     pub fn new(project: Project) -> Self {
         Self {
-            form: FormPopup::new(vec![
+            form: Form::standard().title("Edit Project").inputs(vec![
                 FormInput {
-                    label: Field::Name.label(),
+                    label: Field::Name.label().to_string(),
                     initial_value: project.name.clone(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: None,
                 },
                 FormInput {
-                    label: Field::Path.label(),
+                    label: Field::Path.label().to_string(),
                     initial_value: project.path.clone(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: None,
                 },
             ]),
             project,
@@ -53,8 +55,8 @@ impl Popup for EditProjectPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
-                let name: String = self.form.value(Field::Name as usize).into();
-                let path: String = self.form.value(Field::Path as usize).into();
+                let name: String = self.form.value(Field::Name as usize);
+                let path: String = self.form.value(Field::Path as usize);
                 let mut project = self.project.clone();
                 project.name = name;
                 project.path = path;
@@ -65,7 +67,7 @@ impl Popup for EditProjectPopup {
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        open_input_popup(frame, area, "Edit Project", &self.form);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }

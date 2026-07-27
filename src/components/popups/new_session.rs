@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
-        popups::{Popup, PopupOutcome, open_input_popup},
+        form::{Form, FormEvent, FormInput, InputValidation, TextRule},
+        popups::{Popup, PopupOutcome},
     },
     project::Project,
     session::Session,
@@ -36,7 +36,7 @@ impl Field {
 }
 
 pub struct NewSessionPopup {
-    form: FormPopup,
+    form: Form,
     all_projects: Vec<Project>,
 }
 
@@ -49,50 +49,44 @@ impl NewSessionPopup {
         all_projects: Vec<Project>,
     ) -> Self {
         Self {
-            form: FormPopup::new(vec![
+            form: Form::standard().title("New Session").inputs(vec![
                 FormInput {
-                    label: Field::Project.label(),
-                    value: init_project.clone().map(|p| p.name).unwrap_or_default(),
+                    label: Field::Project.label().to_string(),
+                    initial_value: init_project.clone().map(|p| p.name).unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::OneOf(
                         all_projects.iter().map(|p| p.name.clone()).collect(),
                     )])),
                     dependant_on: None,
-                    hidden: false,
                 },
                 FormInput {
-                    label: Field::Name.label(),
-                    value: name.unwrap_or_default(),
+                    label: Field::Name.label().to_string(),
+                    initial_value: name.unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
                     dependant_on: None,
-                    hidden: false,
                 },
                 FormInput {
-                    label: Field::UseCustomWorktreeName.label(),
-                    value: false.to_string(),
+                    label: Field::UseCustomWorktreeName.label().to_string(),
+                    initial_value: false.to_string(),
                     validation: Some(InputValidation::Boolean),
                     dependant_on: None,
-                    hidden: false,
                 },
                 FormInput {
-                    label: Field::WorktreeName.label(),
-                    value: worktree_name.unwrap_or_default(),
-                    validation: None,
-                    dependant_on: Some(Field::UseCustomWorktreeName as i32),
-                    hidden: true,
+                    label: Field::WorktreeName.label().to_string(),
+                    initial_value: worktree_name.unwrap_or_default(),
+                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
+                    dependant_on: Some((Field::UseCustomWorktreeName as usize, true)),
                 },
                 FormInput {
-                    label: Field::UseCustomPath.label(),
-                    value: false.to_string(),
+                    label: Field::UseCustomPath.label().to_string(),
+                    initial_value: false.to_string(),
                     validation: Some(InputValidation::Boolean),
                     dependant_on: None,
-                    hidden: false,
                 },
                 FormInput {
                     label: Field::Path.label().to_string(),
-                    value: path.unwrap_or_default(),
+                    initial_value: path.unwrap_or_default(),
                     validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                    dependant_on: Some(Field::UseCustomPath as i32),
-                    hidden: true,
+                    dependant_on: Some((Field::UseCustomPath as usize, true)),
                 },
             ]),
             all_projects,
@@ -104,18 +98,32 @@ impl Popup for NewSessionPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
-                let project_name: String = self.form.value(Field::Project as usize).into();
-                let project_id: Option<Uuid> = self
-                    .all_projects
-                    .iter()
-                    .find(|p| p.name == project_name)
-                    .map(|p| p.id);
-                let path: String = self.form.value(Field::Path as usize).into();
-                let worktree_name: String = self.form.value(Field::WorktreeName as usize).into();
+                let project_name: String = self.form.value(Field::Project as usize);
+                let project: Option<&Project> =
+                    self.all_projects.iter().find(|p| p.name == project_name);
+                let session_name: String = self.form.value(Field::Name as usize);
+                // TODO: Implement dynamic types
+                let use_custom_worktree_name: String =
+                    self.form.value(Field::UseCustomWorktreeName as usize);
+                let mut worktree_name: String = session_name.clone();
+                if use_custom_worktree_name == "true" {
+                    worktree_name = self.form.value(Field::WorktreeName as usize);
+                }
+                let use_custom_path: String = self.form.value(Field::UseCustomPath as usize);
+                let mut path: String = String::default();
+                if use_custom_path == "true" {
+                    path = self.form.value(Field::Path as usize);
+                } else if let Some(p) = project {
+                    path = format!("{}-{}", p.path, session_name);
+                }
+                let mut project_id: Option<Uuid> = None;
+                if let Some(p) = project {
+                    project_id = Some(p.id);
+                }
                 let session = Session {
                     id: Uuid::new_v4(),
                     project_id,
-                    name: self.form.value(Field::Name as usize).into(),
+                    name: self.form.value(Field::Name as usize),
                     path: Some(path.clone()).filter(|s| !s.is_empty()),
                     worktree: (!worktree_name.is_empty()).then(|| Worktree {
                         name: worktree_name.clone(),
@@ -129,7 +137,7 @@ impl Popup for NewSessionPopup {
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        open_input_popup(frame, area, "New Session", &self.form);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }

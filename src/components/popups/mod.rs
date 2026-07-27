@@ -8,19 +8,9 @@ pub mod remove_session;
 pub mod remove_worktree;
 
 use crossterm::event::KeyEvent;
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Margin, Rect},
-    style::Style,
-    text::{Line, Span, Text},
-    widgets::{Block, Clear, Paragraph},
-};
+use ratatui::{Frame, layout::Rect};
 
-use crate::{
-    action::Action,
-    components::form_popup::FormPopup,
-    theme::{ERROR, ERROR_FOCUSED, SECONDARY},
-};
+use crate::action::Action;
 
 #[derive(Default)]
 pub enum PopupState {
@@ -37,100 +27,5 @@ pub enum PopupOutcome {
 
 pub trait Popup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome;
-    fn draw(&self, frame: &mut Frame, area: Rect);
-}
-
-pub(super) fn open_input_popup(frame: &mut Frame, area: Rect, title: &str, form: &FormPopup) {
-    let height = (2 * form.labels.len() - 1) as u16 + 4;
-    let popup = area.centered(Constraint::Percentage(40), Constraint::Length(height));
-    // clears out any background in the area before rendering the popup
-    frame.render_widget(Clear, popup);
-    frame.render_widget(Block::bordered().title(title), popup);
-    let inner = popup.inner(Margin {
-        horizontal: 1,
-        vertical: 1,
-    });
-
-    let mut constraints: Vec<Constraint> = vec![Constraint::Fill(1)];
-    // TODO: This should only iterate non-hidden inputs
-    for _ in 0..form.non_hidden_inputs().len() {
-        constraints.push(Constraint::Length(1));
-        constraints.push(Constraint::Length(1));
-    }
-    constraints.pop();
-    constraints.push(Constraint::Fill(1));
-
-    let areas = Layout::vertical(constraints).split(inner);
-
-    let mut active_area = Rect::default();
-    let mut active_label = String::default();
-    for (i, label) in form.non_hidden_inputs().iter().enumerate() {
-        let is_focused = form.focused == i;
-        let label = form.non_hidden_inputs()[i].label;
-        let value = form.value(i);
-        let is_valid = form.non_hidden_inputs()[i].is_valid;
-        let widget = labeled_input(label, value, is_focused, is_valid);
-        let area = areas[(i * 2) + 1];
-        frame.render_widget(widget, area);
-        if is_focused {
-            active_area = area;
-            active_label = label.to_string();
-        }
-    }
-
-    frame.set_cursor_position((
-        active_area.x
-            + 1
-            + active_label.len() as u16
-            + 2
-            + form.form_inputs[form.focused_index()].cursor_position as u16,
-        active_area.y,
-    ));
-}
-
-pub(super) fn labeled_input<'a>(
-    label: String,
-    value: &'a str,
-    is_focused: bool,
-    is_valid: bool,
-) -> Paragraph<'a> {
-    let label_style = if !is_valid && is_focused {
-        Style::default().fg(ERROR_FOCUSED)
-    } else if !is_valid {
-        Style::default().fg(ERROR)
-    } else if is_focused {
-        Style::default().fg(SECONDARY)
-    } else {
-        Style::default()
-    };
-    Paragraph::new(Line::from(vec![
-        Span::styled(format!(" {}: ", label), label_style),
-        Span::raw(value),
-    ]))
-}
-
-pub(super) fn open_confirmation_popup(frame: &mut Frame, area: Rect, title: &str, body: &str) {
-    let popup = area.centered(
-        Constraint::Length(body.len() as u16 * 2),
-        Constraint::Length(10),
-    );
-    frame.render_widget(Clear, popup);
-    frame.render_widget(Block::bordered().title(title), popup);
-    let inner = popup.inner(Margin {
-        horizontal: 1,
-        vertical: 1,
-    });
-    let [_, text_area, _] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(4),
-        Constraint::Fill(1),
-    ])
-    .areas(inner);
-    let text = Text::from(vec![
-        Line::from(body).centered(),
-        Line::from(""),
-        Line::from(""),
-        Line::from("y / n").centered(),
-    ]);
-    frame.render_widget(Paragraph::new(text), text_area);
+    fn draw(&mut self, frame: &mut Frame, area: Rect);
 }

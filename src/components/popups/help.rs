@@ -3,12 +3,15 @@ use ratatui::{
     Frame,
     layout::{Constraint, Margin, Rect},
     style::{Modifier, Style},
-    widgets::{Block, Cell, Clear, Row, Table},
+    widgets::{Cell, Row, Table},
 };
 
 use crate::{
     action::Action,
-    components::popups::{Popup, PopupOutcome},
+    components::{
+        form::Form,
+        popups::{Popup, PopupOutcome},
+    },
 };
 
 const DISPLAY_ORDER: &[Action] = &[
@@ -32,12 +35,16 @@ const DISPLAY_ORDER: &[Action] = &[
 ];
 
 pub struct HelpPopup {
+    form: Form,
     keymaps: Vec<(String, String)>,
 }
 
 impl HelpPopup {
     pub fn new(keymaps: Vec<(String, String)>) -> Self {
-        Self { keymaps }
+        Self {
+            form: Form::custom().title("Help"),
+            keymaps,
+        }
     }
 }
 
@@ -50,7 +57,7 @@ impl Popup for HelpPopup {
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
         let key_column_title = "Key";
         let action_column_title = "Action";
 
@@ -93,8 +100,9 @@ impl Popup for HelpPopup {
         let height = (ordered_keymaps.len() as u16 * line_height) + header + border + padding;
 
         let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
-        frame.render_widget(Clear, popup);
-        frame.render_widget(Block::bordered().title("Help"), popup);
+
+        self.form.draw_form_frame(frame, popup);
+
         let inner = popup.inner(Margin {
             horizontal: 2,
             vertical: 2,
