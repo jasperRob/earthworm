@@ -173,9 +173,12 @@ impl Form {
                 if let Some(InputValidation::Text(_)) = state.form_input.validation
                     && state.cursor_position > 0
                 {
-                    let remove_at = state.cursor_position - 1;
-                    state.value.remove(remove_at);
-                    self.move_cursor_left();
+                    if let Some((byte_idx, _)) =
+                        state.value.char_indices().nth(state.cursor_position - 1)
+                    {
+                        state.value.remove(byte_idx);
+                        self.move_cursor_left();
+                    }
                 }
                 FormEvent::Continue
             }
