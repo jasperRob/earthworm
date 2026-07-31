@@ -7,38 +7,21 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph},
 };
 
-use crate::theme::{ERROR, ERROR_FOCUSED, SECONDARY};
+use crate::{
+    components::form::FormInput,
+    theme::{ERROR, ERROR_FOCUSED, SECONDARY},
+};
 
-pub enum FormType {
+enum FormType {
     Standard,
     Confirmation,
     Custom,
-}
-
-#[derive(Clone)]
-pub enum InputValidation {
-    Text(Vec<TextRule>),
-    Boolean,
-}
-
-#[derive(Clone)]
-pub enum TextRule {
-    NonEmpty,
-    OneOf(Vec<String>),
 }
 
 pub enum FormEvent {
     Continue,
     Submit,
     Cancel,
-}
-
-#[derive(Clone)]
-pub struct FormInput {
-    pub label: String,
-    pub initial_value: String,
-    pub validation: Option<InputValidation>,
-    pub dependant_on: Option<(usize, bool)>,
 }
 
 #[derive(Clone)]
@@ -160,8 +143,7 @@ impl Form {
             }
             KeyCode::Char(c) => {
                 let state = &mut self.form_input_states[self.focused];
-                if let Some(InputValidation::Text(_)) = state.form_input.validation
-                    && state.value.is_char_boundary(state.cursor_position)
+                if state.form_input.is_text() && state.value.is_char_boundary(state.cursor_position)
                 {
                     state.value.insert(state.cursor_position, c);
                     self.move_cursor_right();
@@ -170,37 +152,31 @@ impl Form {
             }
             KeyCode::Backspace => {
                 let state = &mut self.form_input_states[self.focused];
-                if let Some(InputValidation::Text(_)) = state.form_input.validation
+                if state.form_input.is_text()
                     && state.cursor_position > 0
-                {
-                    if let Some((byte_idx, _)) =
+                    && let Some((byte_idx, _)) =
                         state.value.char_indices().nth(state.cursor_position - 1)
-                    {
-                        state.value.remove(byte_idx);
-                        self.move_cursor_left();
-                    }
+                {
+                    state.value.remove(byte_idx);
+                    self.move_cursor_left();
                 }
                 FormEvent::Continue
             }
             KeyCode::Left => {
                 let state = &mut self.form_input_states[self.focused];
-                match state.form_input.validation {
-                    Some(InputValidation::Boolean) if state.value == "true" => {
-                        state.value = "false".to_string();
-                    }
-                    Some(InputValidation::Text(_)) => self.move_cursor_left(),
-                    _ => {}
+                if state.form_input.is_boolean() && state.value == "true" {
+                    state.value = "false".to_string();
+                } else if state.form_input.is_text() {
+                    self.move_cursor_left();
                 }
                 FormEvent::Continue
             }
             KeyCode::Right => {
                 let state = &mut self.form_input_states[self.focused];
-                match state.form_input.validation {
-                    Some(InputValidation::Boolean) if state.value == "false" => {
-                        state.value = "true".to_string();
-                    }
-                    Some(InputValidation::Text(_)) => self.move_cursor_right(),
-                    _ => {}
+                if state.form_input.is_boolean() && state.value == "false" {
+                    state.value = "true".to_string();
+                } else if state.form_input.is_text() {
+                    self.move_cursor_right();
                 }
                 FormEvent::Continue
             }
@@ -284,9 +260,7 @@ impl Form {
             Style::default()
         };
         let mut value_span = Span::raw(state.value.clone());
-        if let Some(validation) = &state.form_input.validation
-            && let InputValidation::Boolean = validation
-        {
+        if state.form_input.is_boolean() {
             let span_content = if state.value == "true" { "[X]" } else { "[ ]" };
             value_span = Span::raw(span_content);
         }
@@ -328,18 +302,7 @@ impl Form {
 
     fn validate(&mut self) {
         self.form_input_states.iter_mut().for_each(|input_state| {
-            input_state.is_valid = match &input_state.form_input.validation {
-                Some(InputValidation::Text(rules)) => rules.iter().all(|r| match r {
-                    TextRule::NonEmpty => !input_state.value.is_empty(),
-                    TextRule::OneOf(options) => {
-                        input_state.value.is_empty() || options.contains(&input_state.value)
-                    }
-                }),
-                Some(InputValidation::Boolean) => {
-                    input_state.value == "true" || input_state.value == "false"
-                }
-                None => true,
-            }
+            input_state.is_valid = input_state.form_input.is_valid(&input_state.value)
         });
         let valid: Vec<bool> = self.form_input_states.iter().map(|s| s.is_valid).collect();
         let values: Vec<String> = self

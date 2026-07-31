@@ -34,7 +34,7 @@ impl Popup for RemoveWorktreePopup {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
                 PopupOutcome::Submitted(Action::RemoveWorktree(
-                    // TODO: Shouldn't need to clone these here.
+                    // TODO: is there a better way of passing the originals here?
                     self.project.clone(),
                     self.worktree.clone(),
                 ))

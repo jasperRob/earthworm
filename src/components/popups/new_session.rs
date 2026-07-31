@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     action::Action,
     components::{
-        form::{Form, FormEvent, FormInput, InputValidation, TextRule},
+        form::{Form, FormEvent, FormInput},
         popups::{Popup, PopupOutcome},
     },
     project::Project,
@@ -50,44 +50,32 @@ impl NewSessionPopup {
     ) -> Self {
         Self {
             form: Form::standard().title("New Session").inputs(vec![
-                FormInput {
-                    label: Field::Project.label().to_string(),
-                    initial_value: init_project.clone().map(|p| p.name).unwrap_or_default(),
-                    validation: Some(InputValidation::Text(vec![TextRule::OneOf(
-                        all_projects.iter().map(|p| p.name.clone()).collect(),
-                    )])),
-                    dependant_on: None,
-                },
-                FormInput {
-                    label: Field::Name.label().to_string(),
-                    initial_value: name.unwrap_or_default(),
-                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                    dependant_on: None,
-                },
-                FormInput {
-                    label: Field::UseCustomWorktreeName.label().to_string(),
-                    initial_value: false.to_string(),
-                    validation: Some(InputValidation::Boolean),
-                    dependant_on: None,
-                },
-                FormInput {
-                    label: Field::WorktreeName.label().to_string(),
-                    initial_value: worktree_name.unwrap_or_default(),
-                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                    dependant_on: Some((Field::UseCustomWorktreeName as usize, true)),
-                },
-                FormInput {
-                    label: Field::UseCustomPath.label().to_string(),
-                    initial_value: false.to_string(),
-                    validation: Some(InputValidation::Boolean),
-                    dependant_on: None,
-                },
-                FormInput {
-                    label: Field::Path.label().to_string(),
-                    initial_value: path.unwrap_or_default(),
-                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                    dependant_on: Some((Field::UseCustomPath as usize, true)),
-                },
+                FormInput::new()
+                    .label(Field::Project.label().to_string())
+                    .initial_value(init_project.clone().map(|p| p.name).unwrap_or_default())
+                    .one_of(all_projects.iter().map(|p| p.name.clone()).collect()),
+                FormInput::new()
+                    .label(Field::Name.label().to_string())
+                    .initial_value(name.unwrap_or_default())
+                    .required(),
+                FormInput::new()
+                    .label(Field::UseCustomWorktreeName.label().to_string())
+                    .initial_value(false.to_string())
+                    .boolean(),
+                FormInput::new()
+                    .label(Field::WorktreeName.label().to_string())
+                    .initial_value(worktree_name.unwrap_or_default())
+                    .required()
+                    .dependant_on((Field::UseCustomWorktreeName as usize, true)),
+                FormInput::new()
+                    .label(Field::UseCustomPath.label().to_string())
+                    .initial_value(false.to_string())
+                    .boolean(),
+                FormInput::new()
+                    .label(Field::Path.label().to_string())
+                    .initial_value(path.unwrap_or_default())
+                    .required()
+                    .dependant_on((Field::UseCustomPath as usize, true)),
             ]),
             all_projects,
         }
