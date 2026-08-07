@@ -38,10 +38,6 @@ impl EditProjectPopup {
                     .initial_value(project.name.clone())
                     .required(),
                 FormInput::new()
-                    .label(Field::Name.label())
-                    .initial_value(project.name.clone())
-                    .required(),
-                FormInput::new()
                     .label(Field::Path.label())
                     .initial_value(project.path.clone())
                     .required(),
@@ -71,3 +67,4 @@ impl Popup for EditProjectPopup {
         self.form.draw(frame, area);
     }
 }
+
