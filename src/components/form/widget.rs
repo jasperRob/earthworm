@@ -143,9 +143,14 @@ impl Form {
             }
             KeyCode::Char(c) => {
                 let state = &mut self.form_input_states[self.focused];
-                if state.form_input.is_text() && state.value.is_char_boundary(state.cursor_position)
-                {
-                    state.value.insert(state.cursor_position, c);
+                if state.form_input.is_text() {
+                    let byte_idx = state
+                        .value
+                        .char_indices()
+                        .nth(state.cursor_position)
+                        .map(|(i, _)| i)
+                        .unwrap_or(state.value.len());
+                    state.value.insert(byte_idx, c);
                     self.move_cursor_right();
                 }
                 FormEvent::Continue
@@ -347,5 +352,228 @@ impl Form {
 
     pub fn value(&self, index: usize) -> String {
         self.form_input_states[index].value.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::KeyModifiers;
+
+    use super::*;
+
+    #[test]
+    fn test_type_char_at_string_end() {
+        // TODO: .required() is necessary to set a text input validation. Fix that later.
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "a");
+        assert_eq!(form.form_input_states[0].cursor_position, 1);
+    }
+
+    #[test]
+    fn test_type_char_mid_string() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 3;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "helglo");
+        assert_eq!(form.form_input_states[0].cursor_position, 4);
+    }
+
+    #[test]
+    fn test_type_multi_byte_char() {
+        // TODO: Fix this with multi byte char
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('é'), KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "é");
+        assert_eq!(form.form_input_states[0].cursor_position, 1);
+    }
+
+    #[test]
+    fn test_backspace_at_zero_index() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 0;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 0);
+    }
+
+    #[test]
+    fn test_backspace_mid_string() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 2;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hllo");
+        assert_eq!(form.form_input_states[0].cursor_position, 1);
+    }
+
+    #[test]
+    fn test_backspace_at_string_end() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 5;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hell");
+        assert_eq!(form.form_input_states[0].cursor_position, 4);
+    }
+
+    #[test]
+    fn test_backspace_multi_byte_char() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("é");
+        form.form_input_states[0].cursor_position = 1;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "");
+        assert_eq!(form.form_input_states[0].cursor_position, 0);
+    }
+
+    #[test]
+    fn test_cursor_left_at_zero_index() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 0;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 0);
+    }
+
+    #[test]
+    fn test_cursor_left_mid_string() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 3;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 2);
+    }
+
+    #[test]
+    fn test_cursor_left_at_string_end() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 5;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 4);
+    }
+
+    #[test]
+    fn test_cursor_right_at_zero_index() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 0;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 1);
+    }
+
+    #[test]
+    fn test_cursor_right_mid_string() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 3;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 4);
+    }
+
+    #[test]
+    fn test_cursor_right_at_string_end() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        form.form_input_states[0].value = String::from("hello");
+        form.form_input_states[0].cursor_position = 5;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        assert_eq!(form.form_input_states[0].cursor_position, 5);
+    }
+
+    #[test]
+    fn test_tab_moves_focus_down() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        form.focused = 0;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(form.focused, 1);
+    }
+
+    #[test]
+    fn test_down_arrow_moves_focus_down() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        form.focused = 0;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+        assert_eq!(form.focused, 1);
+    }
+
+    #[test]
+    fn test_focus_down_has_no_effect_on_last_input() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        form.focused = 1;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(form.focused, 1);
+    }
+
+    #[test]
+    fn test_backtab_moves_focus_up() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        form.focused = 1;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+        assert_eq!(form.focused, 0);
+    }
+
+    #[test]
+    fn test_up_arrow_moves_focus_up() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        form.focused = 1;
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
+        assert_eq!(form.focused, 0);
+    }
+
+    #[test]
+    fn test_focus_up_has_no_effect_on_first_input() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        assert_eq!(form.focused, 0);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+        assert_eq!(form.focused, 0);
+    }
+
+    #[test]
+    fn test_right_arrow_toggles_boolean_input_true() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .boolean()
+                .initial_value(String::from("false")),
+        ]);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "true");
+    }
+
+    #[test]
+    fn test_left_arrow_toggles_boolean_input_false() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .boolean()
+                .initial_value(String::from("true")),
+        ]);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "false");
     }
 }

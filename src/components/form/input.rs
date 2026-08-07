@@ -92,3 +92,22 @@ impl FormInput {
             .all(|v| v.is_satisfied_by(value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_required_input() {
+        let form_input: FormInput = FormInput::new().required();
+        assert_eq!(form_input.is_valid("hello world"), true);
+        assert_eq!(form_input.is_valid(""), false);
+    }
+
+    #[test]
+    fn test_validate_boolean_input() {
+        let form_input: FormInput = FormInput::new().boolean();
+        assert_eq!(form_input.is_valid("true"), true);
+        assert_eq!(form_input.is_valid("false"), true);
+    }
+}
