@@ -100,14 +100,14 @@ mod tests {
     #[test]
     fn test_validate_required_input() {
         let form_input: FormInput = FormInput::new().required();
-        assert_eq!(form_input.is_valid("hello world"), true);
-        assert_eq!(form_input.is_valid(""), false);
+        assert!(form_input.is_valid("hello world"));
+        assert!(!form_input.is_valid(""));
     }
 
     #[test]
     fn test_validate_boolean_input() {
         let form_input: FormInput = FormInput::new().boolean();
-        assert_eq!(form_input.is_valid("true"), true);
-        assert_eq!(form_input.is_valid("false"), true);
+        assert!(form_input.is_valid("true"));
+        assert!(form_input.is_valid("false"));
     }
 }

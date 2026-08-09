@@ -67,4 +67,3 @@ impl Popup for EditProjectPopup {
         self.form.draw(frame, area);
     }
 }
-
