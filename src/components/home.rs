@@ -426,7 +426,7 @@ impl Component for Home {
         frame.render_widget(info_bar, info_row);
         frame.render_widget(search_bar, search_row);
 
-        match &self.popup_state {
+        match &mut self.popup_state {
             PopupState::Closed => {}
             PopupState::Open(p) => p.draw(frame, area),
         }

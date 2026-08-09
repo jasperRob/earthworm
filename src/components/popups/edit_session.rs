@@ -4,8 +4,8 @@ use ratatui::{Frame, layout::Rect};
 use crate::{
     action::Action,
     components::{
-        form_popup::{FormEvent, FormInput, FormPopup, InputValidation, TextRule},
-        popups::{Popup, PopupOutcome, open_input_popup},
+        form::{Form, FormEvent, FormInput},
+        popups::{Popup, PopupOutcome},
     },
     session::Session,
 };
@@ -25,24 +25,22 @@ impl Field {
 }
 
 pub struct EditSessionPopup {
-    form: FormPopup,
+    form: Form,
     session: Session,
 }
 
 impl EditSessionPopup {
     pub fn new(session: Session) -> Self {
         Self {
-            form: FormPopup::new(vec![
-                FormInput {
-                    label: Field::Name.label(),
-                    initial_value: session.name.clone(),
-                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                },
-                FormInput {
-                    label: Field::Path.label(),
-                    initial_value: session.path.clone().unwrap_or_default(),
-                    validation: Some(InputValidation::Text(vec![TextRule::NonEmpty])),
-                },
+            form: Form::standard().title("Edit Session").inputs(vec![
+                FormInput::new()
+                    .label(Field::Name.label())
+                    .initial_value(session.name.clone())
+                    .required(),
+                FormInput::new()
+                    .label(Field::Path.label())
+                    .initial_value(session.path.clone().unwrap_or_default())
+                    .required(),
             ]),
             session,
         }
@@ -53,8 +51,8 @@ impl Popup for EditSessionPopup {
     fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
-                let name: String = self.form.value(Field::Name as usize).into();
-                let path: String = self.form.value(Field::Path as usize).into();
+                let name: String = self.form.value(Field::Name as usize);
+                let path: String = self.form.value(Field::Path as usize);
                 let mut session = self.session.clone();
                 session.name = name;
                 session.path = Some(path);
@@ -65,7 +63,7 @@ impl Popup for EditSessionPopup {
         }
     }
 
-    fn draw(&self, frame: &mut Frame, area: Rect) {
-        open_input_popup(frame, area, "Edit Session", &self.form);
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
     }
 }
