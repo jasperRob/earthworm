@@ -12,14 +12,12 @@ use crate::{
 
 enum Field {
     Name = 0,
-    Path = 1,
 }
 
 impl Field {
     fn label(self) -> &'static str {
         match self {
             Self::Name => "Name",
-            Self::Path => "Path",
         }
     }
 }
@@ -37,10 +35,6 @@ impl EditSessionPopup {
                     .label(Field::Name.label())
                     .initial_value(session.name.clone())
                     .required(),
-                FormInput::new()
-                    .label(Field::Path.label())
-                    .initial_value(session.path.clone().unwrap_or_default())
-                    .required(),
             ]),
             session,
         }
@@ -52,10 +46,8 @@ impl Popup for EditSessionPopup {
         match self.form.handle_key(key) {
             FormEvent::Submit => {
                 let name: String = self.form.value(Field::Name as usize);
-                let path: String = self.form.value(Field::Path as usize);
                 let mut session = self.session.clone();
                 session.name = name;
-                session.path = Some(path);
                 PopupOutcome::Submitted(Action::UpdateSession(session))
             }
             FormEvent::Cancel => PopupOutcome::Cancelled,

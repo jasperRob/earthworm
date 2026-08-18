@@ -94,6 +94,11 @@ impl Form {
             })
         }
         self.form_input_states = form_input_states;
+        self.focused = self
+            .form_input_states
+            .iter()
+            .position(|s| !s.form_input.readonly)
+            .unwrap_or(0);
         self
     }
 
@@ -122,7 +127,10 @@ impl Form {
             KeyCode::Tab | KeyCode::Down => {
                 let n = self.form_input_states.len();
                 let mut next = self.focused + 1;
-                while next < n && self.form_input_states[next].hidden {
+                while next < n
+                    && (self.form_input_states[next].hidden
+                        || self.form_input_states[next].form_input.readonly)
+                {
                     next += 1;
                 }
                 if next < n {
@@ -134,7 +142,9 @@ impl Form {
                 let mut prev = self.focused;
                 while prev > 0 {
                     prev -= 1;
-                    if !self.form_input_states[prev].hidden {
+                    if !(self.form_input_states[prev].hidden
+                        || self.form_input_states[prev].form_input.readonly)
+                    {
                         self.focused = prev;
                         break;
                     }
@@ -143,6 +153,9 @@ impl Form {
             }
             KeyCode::Char(c) => {
                 let state = &mut self.form_input_states[self.focused];
+                if state.form_input.readonly {
+                    return FormEvent::Continue;
+                }
                 if state.form_input.is_text() {
                     let byte_idx = state
                         .value
@@ -157,6 +170,9 @@ impl Form {
             }
             KeyCode::Backspace => {
                 let state = &mut self.form_input_states[self.focused];
+                if state.form_input.readonly {
+                    return FormEvent::Continue;
+                }
                 if state.form_input.is_text()
                     && state.cursor_position > 0
                     && let Some((byte_idx, _)) =
@@ -168,21 +184,23 @@ impl Form {
                 FormEvent::Continue
             }
             KeyCode::Left => {
-                let state = &mut self.form_input_states[self.focused];
-                if state.form_input.is_boolean() && state.value == "true" {
-                    state.value = "false".to_string();
-                } else if state.form_input.is_text() {
-                    self.move_cursor_left();
-                }
+                // let state = &mut self.form_input_states[self.focused];
+                // if state.form_input.is_boolean() && state.value == "true" {
+                //     state.value = "false".to_string();
+                // } else if state.form_input.is_text() {
+                //     self.move_cursor_left();
+                // }
+                self.move_cursor_left();
                 FormEvent::Continue
             }
             KeyCode::Right => {
-                let state = &mut self.form_input_states[self.focused];
-                if state.form_input.is_boolean() && state.value == "false" {
-                    state.value = "true".to_string();
-                } else if state.form_input.is_text() {
-                    self.move_cursor_right();
-                }
+                // let state = &mut self.form_input_states[self.focused];
+                // if state.form_input.is_boolean() && state.value == "false" {
+                //     state.value = "true".to_string();
+                // } else if state.form_input.is_text() {
+                //     self.move_cursor_right();
+                // }
+                self.move_cursor_right();
                 FormEvent::Continue
             }
             KeyCode::Enter => FormEvent::Submit,
@@ -264,11 +282,11 @@ impl Form {
         } else {
             Style::default()
         };
-        let mut value_span = Span::raw(state.value.clone());
-        if state.form_input.is_boolean() {
-            let span_content = if state.value == "true" { "[X]" } else { "[ ]" };
-            value_span = Span::raw(span_content);
-        }
+        let value_span = Span::raw(state.value.clone());
+        // if state.form_input.is_boolean() {
+        //     let span_content = if state.value == "true" { "[X]" } else { "[ ]" };
+        //     value_span = Span::raw(span_content);
+        // }
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {}: ", state.form_input.label), label_style),
             value_span,
@@ -555,25 +573,53 @@ mod tests {
         assert_eq!(form.focused, 0);
     }
 
+    // #[test]
+    // fn test_right_arrow_toggles_boolean_input_true() {
+    //     let mut form: Form = Form::standard().inputs(vec![
+    //         FormInput::new()
+    //             .boolean()
+    //             .initial_value(String::from("false")),
+    //     ]);
+    //     form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+    //     assert_eq!(form.form_input_states[0].value, "true");
+    // }
+
+    // #[test]
+    // fn test_left_arrow_toggles_boolean_input_false() {
+    //     let mut form: Form = Form::standard().inputs(vec![
+    //         FormInput::new()
+    //             .boolean()
+    //             .initial_value(String::from("true")),
+    //     ]);
+    //     form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+    //     assert_eq!(form.form_input_states[0].value, "false");
+    // }
+
     #[test]
-    fn test_right_arrow_toggles_boolean_input_true() {
+    fn test_readonly_input_is_not_focusable() {
         let mut form: Form = Form::standard().inputs(vec![
             FormInput::new()
-                .boolean()
-                .initial_value(String::from("false")),
+                .initial_value(String::from("hello"))
+                .readonly(),
+            FormInput::new().required(),
         ]);
-        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
-        assert_eq!(form.form_input_states[0].value, "true");
+        assert_eq!(form.focused, 1);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
+        assert_eq!(form.focused, 1);
     }
 
     #[test]
-    fn test_left_arrow_toggles_boolean_input_false() {
+    fn test_readonly_input_is_not_editable() {
         let mut form: Form = Form::standard().inputs(vec![
             FormInput::new()
-                .boolean()
-                .initial_value(String::from("true")),
+                .initial_value(String::from("hello"))
+                .readonly(),
         ]);
-        form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
-        assert_eq!(form.form_input_states[0].value, "false");
+        form.focused = 0;
+        assert_eq!(form.form_input_states[0].value, "hello");
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "hello");
     }
 }

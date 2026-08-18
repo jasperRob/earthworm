@@ -22,6 +22,7 @@ pub enum Action {
     CmdSelectPrev,
     CmdAddProject,
     CmdAddSession,
+    CmdAddSessionInProject,
     CmdDeleteItem,
     CmdJumpTop,
     CmdJumpBottom,

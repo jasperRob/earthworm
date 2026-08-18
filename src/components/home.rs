@@ -7,8 +7,9 @@ use crate::{
     components::popups::{
         PopupOutcome, PopupState, edit_project::EditProjectPopup, edit_session::EditSessionPopup,
         help::HelpPopup, new_project::NewProjectPopup, new_session::NewSessionPopup,
-        remove_project::RemoveProjectPopup, remove_session::RemoveSessionPopup,
-        remove_worktree::RemoveWorktreePopup,
+        new_session_from_worktree::NewSessionFromWorktreePopup,
+        new_session_in_project::NewSessionInProjectPopup, remove_project::RemoveProjectPopup,
+        remove_session::RemoveSessionPopup, remove_worktree::RemoveWorktreePopup,
     },
     config::key_event_to_string,
     project::Project,
@@ -249,34 +250,31 @@ impl Component for Home {
             Action::CmdAddProject => {
                 self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
             }
+            Action::CmdAddSessionInProject => {
+                if let Some(selected) = self.list_state.selected() {
+                    match self.list_entries.get(selected) {
+                        Some(ListEntry::Project(p)) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(&p)));
+                        }
+                        Some(ListEntry::ProjectSession(p, _)) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(&p)));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Action::CmdAddSession => {
-                let (project, path, name, worktree_name) = self
-                    .list_state
-                    .selected()
-                    .and_then(|i| self.list_entries.get(i))
-                    .map(|entry| match entry {
-                        ListEntry::Project(p) => {
-                            (Some(p.clone()), Some(p.path.clone()), None, None)
+                if let Some(selected) = self.list_state.selected() {
+                    match self.list_entries.get(selected) {
+                        Some(ListEntry::AvailableWorktree(p, wt)) => {
+                            self.popup_state =
+                                PopupState::Open(Box::new(NewSessionFromWorktreePopup::new(p, wt)))
                         }
-                        ListEntry::ProjectSession(p, _) => {
-                            (Some(p.clone()), Some(p.path.clone()), None, None)
-                        }
-                        ListEntry::AvailableWorktree(p, wt) => (
-                            Some(p.clone()),
-                            Some(wt.path.clone()),
-                            Some(wt.name.clone()),
-                            Some(wt.name.clone()),
-                        ),
-                        ListEntry::Session(_) => (None, None, None, None),
-                    })
-                    .unwrap_or((None, None, None, None));
-                self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new(
-                    name,
-                    worktree_name,
-                    path,
-                    project,
-                    self.projects.values().cloned().collect(),
-                )))
+                        _ => self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new())),
+                    }
+                }
             }
             Action::CmdEdit => {
                 if let Some(i) = self.list_state.selected()
