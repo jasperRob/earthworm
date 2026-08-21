@@ -16,8 +16,8 @@ use crate::{
     session::Session,
     state::{AppState, load_state, save_state},
     tmux::{
-        attach_tmux_session, fetch_tmux_sessions, kill_tmux_session, new_tmux_session,
-        tmux_session_name,
+        attach_tmux_session, fetch_tmux_sessions, get_tmux_session_name, get_tmux_session_path,
+        kill_tmux_session, new_tmux_session, rename_tmux_session,
     },
     tui::{Event, Tui},
 };
@@ -190,6 +190,42 @@ impl App {
                     self.persist_state();
                     self.broadcast_state()?;
                 }
+                Action::UpdateProject(ref project) => {
+                    // Update the session name of any project sessions
+                    // TODO: find solution for updating session paths.
+                    if let Some(old_project) = self.projects.get(&project.id) {
+                        if project.name != old_project.name {
+                            let renames: Vec<(String, String)> = self
+                                .sessions
+                                .values()
+                                .filter(|s| s.project_id == Some(project.id))
+                                .map(|s| {
+                                    (
+                                        get_tmux_session_name(s, Some(old_project)),
+                                        get_tmux_session_name(s, Some(project)),
+                                    )
+                                })
+                                .collect();
+
+                            for (from, to) in renames {
+                                if rename_tmux_session(from.clone(), to.clone()).is_err() {
+                                    self.action_tx.send(Action::Error(format!(
+                                        "Could not update session {from} to {to}"
+                                    )))?;
+                                }
+                            }
+                        }
+                        // TODO: For now, we will just replace in state. In future, maybe think
+                        // about how this can be done with specific field updates. Could be safer.
+                        self.projects.insert(project.id, project.clone());
+                        self.persist_state();
+                        self.broadcast_state()?;
+                    } else {
+                        self.action_tx.send(Action::Error(String::from(
+                            "Could not find existing session",
+                        )))?;
+                    }
+                }
                 Action::RemoveProject(ref project) => {
                     self.projects.remove(&project.id);
                     self.fetch_and_map_tmux_sessions()?;
@@ -221,7 +257,15 @@ impl App {
                         }
                     }
 
-                    if let Err(e) = new_tmux_session(session, project) {
+                    let tmux_session_name = get_tmux_session_name(session, project);
+                    let tmux_session_path = match get_tmux_session_path(session, project) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            self.dispatch_error(e);
+                            return Ok(());
+                        }
+                    };
+                    if let Err(e) = new_tmux_session(tmux_session_name, tmux_session_path) {
                         self.dispatch_error(e);
                         return Ok(());
                     }
@@ -237,6 +281,33 @@ impl App {
                     self.broadcast_state()?;
                     self.action_tx.send(Action::ClearScreen)?;
                 }
+                Action::UpdateSession(ref session) => {
+                    // we need to update the name and path of the tmux session if changed
+                    if let Some(old_session) = self.sessions.get(&session.id) {
+                        let mut old_session_project: Option<&Project> = None;
+                        if let Some(old_session_project_id) = old_session.project_id {
+                            old_session_project = self.projects.get(&old_session_project_id)
+                        }
+                        // update tmux session name
+                        if old_session.name != session.name {
+                            let from = get_tmux_session_name(old_session, old_session_project);
+                            let to = get_tmux_session_name(session, old_session_project);
+                            if let Err(e) = rename_tmux_session(from, to) {
+                                self.action_tx.send(Action::Error(e.to_string()))?;
+                            } else {
+                                self.sessions.insert(session.id, session.clone());
+                            }
+                        }
+                        self.fetch_and_map_tmux_sessions()?;
+                        self.persist_state();
+                        self.broadcast_state()?;
+                        self.action_tx.send(Action::ClearScreen)?;
+                    } else {
+                        self.action_tx.send(Action::Error(String::from(
+                            "Could not find existing session",
+                        )))?;
+                    }
+                }
                 Action::AttachSession(ref session) => {
                     tui.exit()?;
                     let mut project: Option<&Project> = None;
@@ -246,7 +317,8 @@ impl App {
                             self.dispatch_error("project is None");
                         }
                     }
-                    if let Err(e) = attach_tmux_session(session, project) {
+                    let tmux_session_name = get_tmux_session_name(session, project);
+                    if let Err(e) = attach_tmux_session(tmux_session_name) {
                         self.action_tx.send(Action::Error(e.to_string()))?;
                     } else {
                         self.fetch_and_map_tmux_sessions()?;
@@ -264,7 +336,8 @@ impl App {
                             self.dispatch_error("project is None");
                         }
                     }
-                    if let Err(e) = kill_tmux_session(session, project) {
+                    let tmux_session_name = get_tmux_session_name(session, project);
+                    if let Err(e) = kill_tmux_session(tmux_session_name) {
                         self.action_tx.send(Action::Error(e.to_string()))?;
                     }
                     self.sessions.remove(&session.id);
@@ -318,6 +391,7 @@ impl App {
         Ok(())
     }
 
+    /// Reconciles the app's in-memory session state with what tmux actually has running.
     fn fetch_and_map_tmux_sessions(&mut self) -> color_eyre::Result<()> {
         let active_session_names: HashSet<String> = fetch_tmux_sessions()?.into_iter().collect();
 
@@ -325,17 +399,18 @@ impl App {
             .sessions
             .values()
             .filter_map(|s| match s.project_id {
-                None => Some(tmux_session_name(s, None)),
+                None => Some(get_tmux_session_name(s, None)),
                 Some(project_id) => match self.projects.get(&project_id) {
                     None => {
                         self.dispatch_error("project is None");
                         None
                     }
-                    Some(project) => Some(tmux_session_name(s, Some(project))),
+                    Some(project) => Some(get_tmux_session_name(s, Some(project))),
                 },
             })
             .collect();
 
+        // Prune dead sessions
         self.sessions.retain(|_id, session| {
             if session.project_id.is_none() {
                 return true;
@@ -344,13 +419,13 @@ impl App {
                 None => true,
                 Some(project_id) => match self.projects.get(&project_id) {
                     None => false, // TODO: Error
-                    Some(project) => {
-                        active_session_names.contains(&tmux_session_name(session, Some(project)))
-                    }
+                    Some(project) => active_session_names
+                        .contains(&get_tmux_session_name(session, Some(project))),
                 },
             }
         });
 
+        // Capture unmapped tmux sessions
         for name in &active_session_names {
             if !session_names_in_state.contains(name) {
                 let uuid = Uuid::new_v4();

@@ -1,13 +1,13 @@
 #[derive(Clone)]
 enum TextRule {
     NonEmpty,
-    OneOf(Vec<String>),
+    // OneOf(Vec<String>),
 }
 
 #[derive(Clone)]
 enum InputValidation {
     Text(TextRule),
-    Boolean,
+    // Boolean,
 }
 
 impl InputValidation {
@@ -15,9 +15,9 @@ impl InputValidation {
         match self {
             InputValidation::Text(rule) => match rule {
                 TextRule::NonEmpty => !value.is_empty(),
-                TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
+                // TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
             },
-            InputValidation::Boolean => value == "true" || value == "false",
+            // InputValidation::Boolean => value == "true" || value == "false",
         }
     }
 }
@@ -28,6 +28,7 @@ pub struct FormInput {
     pub initial_value: String,
     input_validations: Vec<InputValidation>,
     pub dependant_on: Option<(usize, bool)>,
+    pub readonly: bool,
 }
 
 impl FormInput {
@@ -37,6 +38,7 @@ impl FormInput {
             initial_value: String::default(),
             input_validations: Vec::default(),
             dependant_on: None,
+            readonly: false,
         }
     }
 
@@ -56,19 +58,24 @@ impl FormInput {
         self
     }
 
-    pub fn boolean(mut self) -> Self {
-        self.input_validations.push(InputValidation::Boolean);
-        self
-    }
+    // pub fn boolean(mut self) -> Self {
+    //     self.input_validations.push(InputValidation::Boolean);
+    //     self
+    // }
 
-    pub fn one_of(mut self, items: Vec<String>) -> Self {
-        self.input_validations
-            .push(InputValidation::Text(TextRule::OneOf(items)));
-        self
-    }
+    // pub fn one_of(mut self, items: Vec<String>) -> Self {
+    //     self.input_validations
+    //         .push(InputValidation::Text(TextRule::OneOf(items)));
+    //     self
+    // }
 
-    pub fn dependant_on(mut self, dependant_on: (usize, bool)) -> Self {
-        self.dependant_on = Some(dependant_on);
+    // pub fn dependant_on(mut self, dependant_on: (usize, bool)) -> Self {
+    //     self.dependant_on = Some(dependant_on);
+    //     self
+    // }
+
+    pub fn readonly(mut self) -> Self {
+        self.readonly = true;
         self
     }
 
@@ -80,11 +87,11 @@ impl FormInput {
 
     // TODO: we shouldn't be able to add more than one if Boolean is in there (update here and in
     // the boolean() method)
-    pub fn is_boolean(&self) -> bool {
-        self.input_validations
-            .iter()
-            .any(|v| matches!(v, InputValidation::Boolean))
-    }
+    // pub fn is_boolean(&self) -> bool {
+    //     self.input_validations
+    //         .iter()
+    //         .any(|v| matches!(v, InputValidation::Boolean))
+    // }
 
     pub fn is_valid(&self, value: &str) -> bool {
         self.input_validations
@@ -104,10 +111,10 @@ mod tests {
         assert!(!form_input.is_valid(""));
     }
 
-    #[test]
-    fn test_validate_boolean_input() {
-        let form_input: FormInput = FormInput::new().boolean();
-        assert!(form_input.is_valid("true"));
-        assert!(form_input.is_valid("false"));
-    }
+    // #[test]
+    // fn test_validate_boolean_input() {
+    //     let form_input: FormInput = FormInput::new().boolean();
+    //     assert!(form_input.is_valid("true"));
+    //     assert!(form_input.is_valid("false"));
+    // }
 }

@@ -3,6 +3,8 @@ pub mod edit_session;
 pub mod help;
 pub mod new_project;
 pub mod new_session;
+pub mod new_session_from_worktree;
+pub mod new_session_in_project;
 pub mod remove_project;
 pub mod remove_session;
 pub mod remove_worktree;

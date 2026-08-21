@@ -27,6 +27,7 @@ const DISPLAY_ORDER: &[Action] = &[
     Action::CmdSearchPrev,
     Action::CmdAddProject,
     Action::CmdAddSession,
+    Action::CmdAddSessionInProject,
     Action::CmdDeleteItem,
     Action::CmdAttach,
     Action::CmdEdit,

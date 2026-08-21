@@ -14,6 +14,7 @@
       "<Shift-n>": "CmdSearchPrev",
       "<Space><p>": "CmdAddProject",
       "<Space><s>": "CmdAddSession",
+      "<Space><c>": "CmdAddSessionInProject",
       "<Space><d>": "CmdDeleteItem",
       "<Space><a>": "CmdAttach",
       "<Space><e>": "CmdEdit",
