@@ -64,7 +64,7 @@ impl Popup for NewSessionInProjectPopup {
                     path: Some(path.clone()),
                     worktree: Some(Worktree {
                         name: name.clone(),
-                        path: path,
+                        path,
                     }),
                 };
                 PopupOutcome::Submitted(Action::SubmitSession(session))

@@ -255,11 +255,11 @@ impl Component for Home {
                     match self.list_entries.get(selected) {
                         Some(ListEntry::Project(p)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(&p)));
+                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
                         }
                         Some(ListEntry::ProjectSession(p, _)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(&p)));
+                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
                         }
                         _ => {}
                     }
