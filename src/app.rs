@@ -11,16 +11,15 @@ use crate::{
     action::Action,
     components::{Component, fps::FpsCounter, home::Home, notification::Notification},
     config::Config,
-    git::{create_worktree, fetch_worktrees, remove_worktree},
+    git::fetch_worktrees,
     project::Project,
     session::Session,
     state::{AppState, load_state, save_state},
-    tmux::{
-        attach_tmux_session, fetch_tmux_sessions, get_tmux_session_name, get_tmux_session_path,
-        kill_tmux_session, new_tmux_session, rename_tmux_session,
-    },
+    tmux::{fetch_tmux_sessions, get_tmux_session_name},
     tui::{Event, Tui},
 };
+
+mod handlers;
 
 pub struct App {
     config: Config,
@@ -171,197 +170,54 @@ impl App {
             if action != Action::Tick && action != Action::Render {
                 debug!("{action:?}");
             }
-            match action {
+            let outcome = match action {
                 Action::Tick => {
                     // self.last_tick_key_events.drain(..);
+                    Ok(())
                 }
-                Action::Quit => self.should_quit = true,
-                Action::Suspend => self.should_suspend = true,
-                Action::Resume => self.should_suspend = false,
-                Action::ClearScreen => tui.terminal.clear()?,
-                Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
-                Action::Render => self.render(tui)?,
-                Action::SubmitProject(ref project) => {
-                    let mut project = project.clone();
-                    if !project.path.is_empty() {
-                        project.worktrees = fetch_worktrees(&project.path).unwrap_or_default();
-                    }
-                    self.projects.insert(project.id, project.clone());
-                    self.persist_state();
-                    self.broadcast_state()?;
+                Action::Quit => {
+                    self.should_quit = true;
+                    Ok(())
                 }
-                Action::UpdateProject(ref project) => {
-                    // Update the session name of any project sessions
-                    // TODO: find solution for updating session paths.
-                    if let Some(old_project) = self.projects.get(&project.id) {
-                        if project.name != old_project.name {
-                            let renames: Vec<(String, String)> = self
-                                .sessions
-                                .values()
-                                .filter(|s| s.project_id == Some(project.id))
-                                .map(|s| {
-                                    (
-                                        get_tmux_session_name(s, Some(old_project)),
-                                        get_tmux_session_name(s, Some(project)),
-                                    )
-                                })
-                                .collect();
-
-                            for (from, to) in renames {
-                                if rename_tmux_session(from.clone(), to.clone()).is_err() {
-                                    self.action_tx.send(Action::Error(format!(
-                                        "Could not update session {from} to {to}"
-                                    )))?;
-                                }
-                            }
-                        }
-                        // TODO: For now, we will just replace in state. In future, maybe think
-                        // about how this can be done with specific field updates. Could be safer.
-                        self.projects.insert(project.id, project.clone());
-                        self.persist_state();
-                        self.broadcast_state()?;
-                    } else {
-                        self.action_tx.send(Action::Error(String::from(
-                            "Could not find existing session",
-                        )))?;
-                    }
+                Action::Suspend => {
+                    self.should_suspend = true;
+                    Ok(())
                 }
-                Action::RemoveProject(ref project) => {
-                    self.projects.remove(&project.id);
-                    self.fetch_and_map_tmux_sessions()?;
-                    self.persist_state();
-                    self.broadcast_state()?;
-                    self.action_tx.send(Action::ClearScreen)?;
+                Action::Resume => {
+                    self.should_suspend = false;
+                    Ok(())
                 }
-                Action::SubmitSession(ref session) => {
-                    // TODO: Make this better. Too nested
-                    let mut project: Option<&Project> = None;
-                    if let Some(project_id) = session.project_id {
-                        project = self.projects.get(&project_id);
-
-                        match project {
-                            None => self.dispatch_error("project is None"),
-                            Some(p) => {
-                                let session_path = session.path.clone();
-                                if let Some(path) = session_path {
-                                    let session_worktree = session.worktree.clone();
-                                    if let Some(worktree) = session_worktree
-                                        && !p.worktrees.iter().any(|wt| wt.name == worktree.name)
-                                        && let Err(e) =
-                                            create_worktree(&p.path, &worktree.name, &path)
-                                    {
-                                        self.dispatch_error(e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let tmux_session_name = get_tmux_session_name(session, project);
-                    let tmux_session_path = match get_tmux_session_path(session, project) {
-                        Ok(path) => path,
-                        Err(e) => {
-                            self.dispatch_error(e);
-                            return Ok(());
-                        }
-                    };
-                    if let Err(e) = new_tmux_session(tmux_session_name, tmux_session_path) {
-                        self.dispatch_error(e);
-                        return Ok(());
-                    }
-
-                    self.sessions.insert(session.id, session.clone());
-                    if let Some(project_id) = session.project_id
-                        && let Some(project) = self.projects.get_mut(&project_id)
-                    {
-                        project.sessions.push(session.id);
-                    }
-                    self.fetch_and_map_tmux_sessions()?;
-                    self.persist_state();
-                    self.broadcast_state()?;
-                    self.action_tx.send(Action::ClearScreen)?;
+                Action::ClearScreen => {
+                    tui.terminal.clear()?;
+                    Ok(())
                 }
-                Action::UpdateSession(ref session) => {
-                    // we need to update the name and path of the tmux session if changed
-                    if let Some(old_session) = self.sessions.get(&session.id) {
-                        let mut old_session_project: Option<&Project> = None;
-                        if let Some(old_session_project_id) = old_session.project_id {
-                            old_session_project = self.projects.get(&old_session_project_id)
-                        }
-                        // update tmux session name
-                        if old_session.name != session.name {
-                            let from = get_tmux_session_name(old_session, old_session_project);
-                            let to = get_tmux_session_name(session, old_session_project);
-                            if let Err(e) = rename_tmux_session(from, to) {
-                                self.action_tx.send(Action::Error(e.to_string()))?;
-                            } else {
-                                self.sessions.insert(session.id, session.clone());
-                            }
-                        }
-                        self.fetch_and_map_tmux_sessions()?;
-                        self.persist_state();
-                        self.broadcast_state()?;
-                        self.action_tx.send(Action::ClearScreen)?;
-                    } else {
-                        self.action_tx.send(Action::Error(String::from(
-                            "Could not find existing session",
-                        )))?;
-                    }
+                Action::Resize(w, h) => {
+                    self.handle_resize(tui, w, h)?;
+                    Ok(())
                 }
+                Action::Render => {
+                    self.render(tui)?;
+                    Ok(())
+                }
+                Action::SubmitProject(ref project) => self.on_submit_project(project),
+                Action::UpdateProject(ref project) => self.on_update_project(project),
+                Action::RemoveProject(ref project) => self.on_remove_project(project),
+                Action::SubmitSession(ref session) => self.on_submit_session(session),
+                Action::UpdateSession(ref session) => self.on_update_session(session),
                 Action::AttachSession(ref session) => {
                     tui.exit()?;
-                    let mut project: Option<&Project> = None;
-                    if let Some(project_id) = session.project_id {
-                        project = self.projects.get(&project_id);
-                        if project.is_none() {
-                            self.dispatch_error("project is None");
-                        }
-                    }
-                    let tmux_session_name = get_tmux_session_name(session, project);
-                    if let Err(e) = attach_tmux_session(tmux_session_name) {
-                        self.action_tx.send(Action::Error(e.to_string()))?;
-                    } else {
-                        self.fetch_and_map_tmux_sessions()?;
-                        self.persist_state();
-                        self.broadcast_state()?;
-                        self.action_tx.send(Action::ClearScreen)?;
-                    }
+                    let result = self.on_attach_session(session);
                     tui.enter()?;
+                    result
                 }
-                Action::RemoveSession(ref session) => {
-                    let mut project: Option<&Project> = None;
-                    if let Some(project_id) = session.project_id {
-                        project = self.projects.get(&project_id);
-                        if project.is_none() {
-                            self.dispatch_error("project is None");
-                        }
-                    }
-                    let tmux_session_name = get_tmux_session_name(session, project);
-                    if let Err(e) = kill_tmux_session(tmux_session_name) {
-                        self.action_tx.send(Action::Error(e.to_string()))?;
-                    }
-                    self.sessions.remove(&session.id);
-                    if let Some(project_id) = session.project_id
-                        && let Some(project) = self.projects.get_mut(&project_id)
-                    {
-                        project.sessions.retain(|id| *id != session.id);
-                    }
-                    self.fetch_and_map_tmux_sessions()?;
-                    self.persist_state();
-                    self.broadcast_state()?;
-                    self.action_tx.send(Action::ClearScreen)?;
-                }
+                Action::RemoveSession(ref session) => self.on_remove_session(session),
                 Action::RemoveWorktree(ref project, ref worktree) => {
-                    if let Err(e) = remove_worktree(&project.path, &worktree.path) {
-                        self.action_tx.send(Action::Error(e.to_string()))?;
-                        return Ok(());
-                    }
-                    self.fetch_and_map_tmux_sessions()?;
-                    self.persist_state();
-                    self.broadcast_state()?;
-                    self.action_tx.send(Action::ClearScreen)?;
+                    self.on_remove_worktree(project, worktree)
                 }
-                _ => {}
+                _ => Ok(()),
+            };
+            if let Err(e) = outcome {
+                self.dispatch_error(e);
             }
             for component in self.components.iter_mut() {
                 if let Some(action) = component.update(action.clone())? {
@@ -388,6 +244,14 @@ impl App {
                 }
             }
         })?;
+        Ok(())
+    }
+
+    fn resync(&mut self) -> color_eyre::Result<()> {
+        self.fetch_and_map_tmux_sessions()?;
+        self.persist_state();
+        self.broadcast_state()?;
+        self.action_tx.send(Action::ClearScreen)?;
         Ok(())
     }
 
