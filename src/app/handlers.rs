@@ -69,15 +69,28 @@ impl App {
             .filter(|s| s.project_id == Some(project.id))
             .map(|s| s.id)
             .collect();
+        let mut errors = Vec::new();
         for id in session_ids {
             if let Some(session) = self.sessions.get(&id) {
                 let tmux_session_name = get_tmux_session_name(session, Some(project));
-                kill_tmux_session(tmux_session_name)?;
+                if let Err(e) = kill_tmux_session(tmux_session_name.clone()) {
+                    errors.push(format!(
+                        "Failed to kill session {}: {}",
+                        tmux_session_name, e
+                    ));
+                }
             }
             self.sessions.remove(&id);
         }
         self.projects.remove(&project.id);
-        self.resync()
+        let result = self.resync();
+        if !errors.is_empty() {
+            return Err(eyre!(
+                "Some sessions failed to terminate: {}",
+                errors.join(", ")
+            ));
+        }
+        result
     }
 
     pub(super) fn on_submit_session(&mut self, session: &Session) -> Result<()> {
@@ -112,10 +125,8 @@ impl App {
         let Some(old_session) = self.sessions.get(&session.id) else {
             return Err(eyre!("Could not find existing session"));
         };
-        let mut old_session_project: Option<&Project> = None;
-        if let Some(old_session_project_id) = old_session.project_id {
-            old_session_project = self.projects.get(&old_session_project_id)
-        }
+        let old_session_project: Option<&Project> =
+            old_session.project_id.and_then(|id| self.projects.get(&id));
         // update tmux session name
         if old_session.name != session.name {
             let from = get_tmux_session_name(old_session, old_session_project);
@@ -129,9 +140,7 @@ impl App {
     pub(super) fn on_attach_session(&mut self, session: &Session) -> Result<()> {
         let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
-        if let Err(e) = attach_tmux_session(tmux_session_name) {
-            return Err(eyre!(e));
-        }
+        attach_tmux_session(tmux_session_name)?;
         self.resync()
     }
 
@@ -153,9 +162,7 @@ impl App {
         project: &Project,
         worktree: &Worktree,
     ) -> Result<()> {
-        if let Err(e) = remove_worktree(&project.path, &worktree.path) {
-            return Err(eyre!(e));
-        }
+        remove_worktree(&project.path, &worktree.path)?;
         self.resync()
     }
 }
