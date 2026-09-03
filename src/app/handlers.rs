@@ -83,14 +83,13 @@ impl App {
     pub(super) fn on_submit_session(&mut self, session: &Session) -> Result<()> {
         let project = self.get_session_project(session)?;
 
-        if let Some(p) = project {
-            if let Some(path) = session.path.clone()
-                && let Some(worktree) = session.worktree.clone()
-                && !p.worktrees.iter().any(|wt| wt.name == worktree.name)
-                && let Err(e) = create_worktree(&p.path, &worktree.name, &path)
-            {
-                return Err(e);
-            }
+        if let Some(p) = project
+            && let Some(path) = session.path.clone()
+            && let Some(worktree) = session.worktree.clone()
+            && !p.worktrees.iter().any(|wt| wt.name == worktree.name)
+            && let Err(e) = create_worktree(&p.path, &worktree.name, &path)
+        {
+            return Err(e);
         }
 
         let tmux_session_name = get_tmux_session_name(session, project);
@@ -121,9 +120,7 @@ impl App {
         if old_session.name != session.name {
             let from = get_tmux_session_name(old_session, old_session_project);
             let to = get_tmux_session_name(session, old_session_project);
-            if let Err(e) = rename_tmux_session(from, to) {
-                return Err(e);
-            }
+            rename_tmux_session(from, to)?;
             self.sessions.insert(session.id, session.clone());
         }
         self.resync()
