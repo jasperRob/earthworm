@@ -21,7 +21,9 @@ impl App {
             project.worktrees = fetch_worktrees(&project.path).unwrap_or_default();
         }
         self.projects.insert(project.id, project);
-        self.resync()
+        self.persist_state();
+        self.broadcast_state()?;
+        Ok(())
     }
 
     pub(super) fn on_update_project(&mut self, project: &Project) -> Result<()> {
@@ -59,7 +61,14 @@ impl App {
         // TODO: For now, we will just replace in state. In future, maybe think
         // about how this can be done with specific field updates. Could be safer.
         self.projects.insert(project.id, project.clone());
-        self.resync()
+        if let Some(p) = self.projects.get_mut(&project.id)
+            && !p.path.is_empty()
+        {
+            p.worktrees = fetch_worktrees(&p.path).unwrap_or_default();
+        }
+        self.persist_state();
+        self.broadcast_state()?;
+        Ok(())
     }
 
     pub(super) fn on_remove_project(&mut self, project: &Project) -> Result<()> {
@@ -83,14 +92,15 @@ impl App {
             self.sessions.remove(&id);
         }
         self.projects.remove(&project.id);
-        let result = self.resync();
+        self.persist_state();
+        self.broadcast_state()?;
         if !errors.is_empty() {
             return Err(eyre!(
                 "Some sessions failed to terminate: {}",
                 errors.join(", ")
             ));
         }
-        result
+        Ok(())
     }
 
     pub(super) fn on_submit_session(&mut self, session: &Session) -> Result<()> {
@@ -116,8 +126,14 @@ impl App {
             && let Some(project) = self.projects.get_mut(&project_id)
         {
             project.sessions.push(session.id);
+            // Refresh the worktrees
+            if session.worktree.is_some() && !project.path.is_empty() {
+                project.worktrees = fetch_worktrees(&project.path).unwrap_or_default();
+            }
         }
-        self.resync()
+        self.persist_state();
+        self.broadcast_state()?;
+        Ok(())
     }
 
     pub(super) fn on_update_session(&mut self, session: &Session) -> Result<()> {
@@ -132,16 +148,18 @@ impl App {
             let from = get_tmux_session_name(old_session, old_session_project);
             let to = get_tmux_session_name(session, old_session_project);
             rename_tmux_session(from, to)?;
-            self.sessions.insert(session.id, session.clone());
         }
-        self.resync()
+        self.sessions.insert(session.id, session.clone());
+        self.persist_state();
+        self.broadcast_state()?;
+        Ok(())
     }
 
     pub(super) fn on_attach_session(&mut self, session: &Session) -> Result<()> {
         let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
         attach_tmux_session(tmux_session_name)?;
-        self.resync()
+        Ok(())
     }
 
     pub(super) fn on_remove_session(&mut self, session: &Session) -> Result<()> {
@@ -154,7 +172,9 @@ impl App {
         {
             project.sessions.retain(|id| *id != session.id);
         }
-        self.resync()
+        self.persist_state();
+        self.broadcast_state()?;
+        Ok(())
     }
 
     pub(super) fn on_remove_worktree(
@@ -163,6 +183,10 @@ impl App {
         worktree: &Worktree,
     ) -> Result<()> {
         remove_worktree(&project.path, &worktree.path)?;
-        self.resync()
+        if let Some(p) = self.projects.get_mut(&project.id) {
+            p.worktrees = fetch_worktrees(&p.path).unwrap_or_default();
+        }
+        self.broadcast_state()?;
+        Ok(())
     }
 }

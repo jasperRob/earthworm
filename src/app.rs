@@ -209,6 +209,10 @@ impl App {
                     tui.exit()?;
                     let result = self.on_attach_session(session);
                     tui.enter()?;
+                    if result.is_ok() {
+                        self.action_tx.send(Action::ClearScreen)?;
+                        self.action_tx.send(Action::Render)?;
+                    }
                     result
                 }
                 Action::RemoveSession(ref session) => self.on_remove_session(session),
@@ -245,14 +249,6 @@ impl App {
                 }
             }
         })?;
-        Ok(())
-    }
-
-    fn resync(&mut self) -> color_eyre::Result<()> {
-        self.fetch_and_map_tmux_sessions()?;
-        self.persist_state();
-        self.broadcast_state()?;
-        self.action_tx.send(Action::ClearScreen)?;
         Ok(())
     }
 
