@@ -3,8 +3,17 @@ use crate::worktree::Worktree;
 pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
     let output = std::process::Command::new("git")
         .args(["-C", repo_path, "worktree", "list", "--porcelain"])
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to fetch worktrees: {}",
+            stderr.trim()
+        ));
+    }
 
     let stdout = String::from_utf8(output.stdout)?;
     let mut worktrees = Vec::new();
@@ -31,14 +40,14 @@ pub fn create_worktree(
     worktree_name: &str,
     worktree_path: &str,
 ) -> color_eyre::Result<()> {
-    // let worktree_path = format!("{}-{}", repo_path.trim_end_matches('/'), worktree_name);
-
     let branch_exists = std::process::Command::new("git")
         .args(["-C", repo_path, "rev-parse", "--verify", worktree_name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()?
         .success();
 
-    let status = if branch_exists {
+    let output = if branch_exists {
         std::process::Command::new("git")
             .args([
                 "-C",
@@ -48,7 +57,9 @@ pub fn create_worktree(
                 worktree_path,
                 worktree_name,
             ])
-            .status()?
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()?
     } else {
         std::process::Command::new("git")
             .args([
@@ -60,20 +71,32 @@ pub fn create_worktree(
                 worktree_name,
                 worktree_path,
             ])
-            .status()?
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()?
     };
-    if !status.success() {
-        return Err(color_eyre::eyre::eyre!("git worktree add failed"));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to add worktree: {}",
+            stderr.trim()
+        ));
     }
     Ok(())
 }
 
 pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> color_eyre::Result<()> {
-    let status = std::process::Command::new("git")
+    let output = std::process::Command::new("git")
         .args(["-C", repo_path, "worktree", "remove", worktree_path])
-        .status()?;
-    if !status.success() {
-        return Err(color_eyre::eyre::eyre!("git worktree remove failed"));
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(color_eyre::eyre::eyre!(
+            "Failed to remove worktree: {}",
+            stderr.trim()
+        ));
     }
     Ok(())
 }
