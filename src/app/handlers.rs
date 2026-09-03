@@ -1,9 +1,9 @@
 use color_eyre::eyre::{Result, eyre};
+use uuid::Uuid;
 
 use super::App;
 
 use crate::{
-    action::Action,
     git::{create_worktree, fetch_worktrees, remove_worktree},
     project::Project,
     session::Session,
@@ -63,18 +63,27 @@ impl App {
     }
 
     pub(super) fn on_remove_project(&mut self, project: &Project) -> Result<()> {
+        let session_ids: Vec<Uuid> = self
+            .sessions
+            .values()
+            .filter(|s| s.project_id == Some(project.id))
+            .map(|s| s.id)
+            .collect();
+        for id in session_ids {
+            if let Some(session) = self.sessions.get(&id) {
+                let tmux_session_name = get_tmux_session_name(session, Some(project));
+                kill_tmux_session(tmux_session_name)?;
+            }
+            self.sessions.remove(&id);
+        }
         self.projects.remove(&project.id);
         self.resync()
     }
 
     pub(super) fn on_submit_session(&mut self, session: &Session) -> Result<()> {
-        let mut project: Option<&Project> = None;
-        if let Some(project_id) = session.project_id {
-            let Some(p) = self.projects.get(&project_id) else {
-                return Err(eyre!("no project found for given project id"));
-            };
-            project = Some(p);
+        let project = self.get_session_project(session)?;
 
+        if let Some(p) = project {
             if let Some(path) = session.path.clone()
                 && let Some(worktree) = session.worktree.clone()
                 && !p.worktrees.iter().any(|wt| wt.name == worktree.name)
@@ -85,12 +94,9 @@ impl App {
         }
 
         let tmux_session_name = get_tmux_session_name(session, project);
-        let tmux_session_path = match get_tmux_session_path(session, project) {
-            Ok(path) => path,
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        let tmux_session_path = get_tmux_session_path(session, project)?;
+
+        // Failure to create the tmux session leaves the worktree intact
         new_tmux_session(tmux_session_name, tmux_session_path)?;
 
         self.sessions.insert(session.id, session.clone());
@@ -116,22 +122,15 @@ impl App {
             let from = get_tmux_session_name(old_session, old_session_project);
             let to = get_tmux_session_name(session, old_session_project);
             if let Err(e) = rename_tmux_session(from, to) {
-                self.action_tx.send(Action::Error(e.to_string()))?;
-            } else {
-                self.sessions.insert(session.id, session.clone());
+                return Err(e);
             }
+            self.sessions.insert(session.id, session.clone());
         }
         self.resync()
     }
 
     pub(super) fn on_attach_session(&mut self, session: &Session) -> Result<()> {
-        let mut project: Option<&Project> = None;
-        if let Some(project_id) = session.project_id {
-            project = self.projects.get(&project_id);
-            if project.is_none() {
-                return Err(eyre!("no project found for given project id"));
-            }
-        }
+        let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
         if let Err(e) = attach_tmux_session(tmux_session_name) {
             return Err(eyre!(e));
@@ -140,17 +139,9 @@ impl App {
     }
 
     pub(super) fn on_remove_session(&mut self, session: &Session) -> Result<()> {
-        let mut project: Option<&Project> = None;
-        if let Some(project_id) = session.project_id {
-            project = self.projects.get(&project_id);
-            if project.is_none() {
-                self.dispatch_error("project is None");
-            }
-        }
+        let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
-        if let Err(e) = kill_tmux_session(tmux_session_name) {
-            self.action_tx.send(Action::Error(e.to_string()))?;
-        }
+        kill_tmux_session(tmux_session_name)?;
         self.sessions.remove(&session.id);
         if let Some(project_id) = session.project_id
             && let Some(project) = self.projects.get_mut(&project_id)

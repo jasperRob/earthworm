@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
@@ -255,6 +256,17 @@ impl App {
         Ok(())
     }
 
+    fn get_session_project(&self, session: &Session) -> color_eyre::Result<Option<&Project>> {
+        if let Some(project_id) = session.project_id {
+            self.projects
+                .get(&project_id)
+                .ok_or_else(|| eyre!("no project found for given project_id"))
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Reconciles the app's in-memory session state with what tmux actually has running.
     fn fetch_and_map_tmux_sessions(&mut self) -> color_eyre::Result<()> {
         let active_session_names: HashSet<String> = fetch_tmux_sessions()?.into_iter().collect();
@@ -264,29 +276,22 @@ impl App {
             .values()
             .filter_map(|s| match s.project_id {
                 None => Some(get_tmux_session_name(s, None)),
-                Some(project_id) => match self.projects.get(&project_id) {
-                    None => {
-                        self.dispatch_error("project is None");
-                        None
-                    }
-                    Some(project) => Some(get_tmux_session_name(s, Some(project))),
-                },
+                Some(project_id) => self
+                    .projects
+                    .get(&project_id)
+                    .map(|project| get_tmux_session_name(s, Some(project))),
             })
             .collect();
 
         // Prune dead sessions
         self.sessions.retain(|_id, session| {
-            if session.project_id.is_none() {
+            let Some(project_id) = session.project_id else {
                 return true;
-            }
-            match session.project_id {
-                None => true,
-                Some(project_id) => match self.projects.get(&project_id) {
-                    None => false, // TODO: Error
-                    Some(project) => active_session_names
-                        .contains(&get_tmux_session_name(session, Some(project))),
-                },
-            }
+            };
+            let Some(project) = self.projects.get(&project_id) else {
+                return false;
+            };
+            active_session_names.contains(&get_tmux_session_name(session, Some(project)))
         });
 
         // Capture unmapped tmux sessions

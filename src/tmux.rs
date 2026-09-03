@@ -105,3 +105,93 @@ pub fn attach_tmux_session(tmux_session_name: String) -> color_eyre::Result<()> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use crate::{
+        project::Project,
+        session::Session,
+        tmux::{get_tmux_session_name, get_tmux_session_path},
+        worktree::Worktree,
+    };
+
+    #[test]
+    fn test_get_tmux_session_name_with_project() {
+        let project = Project {
+            id: Uuid::new_v4(),
+            name: String::from("project-name"),
+            path: String::new(),
+            sessions: vec![],
+            worktrees: vec![],
+        };
+        let session = Session {
+            id: Uuid::new_v4(),
+            project_id: None,
+            name: String::from("session-name"),
+            path: None,
+            worktree: None,
+        };
+        assert_eq!(
+            get_tmux_session_name(&session, Some(&project)),
+            "project-name_session-name"
+        )
+    }
+    #[test]
+    fn test_get_tmux_session_name_without_project() {
+        let session = Session {
+            id: Uuid::new_v4(),
+            project_id: None,
+            name: String::from("session-name"),
+            path: None,
+            worktree: None,
+        };
+        assert_eq!(get_tmux_session_name(&session, None), "session-name")
+    }
+    #[test]
+    fn test_get_tmux_session_path_priority_order() {
+        let project = Project {
+            id: Uuid::new_v4(),
+            name: String::new(),
+            path: String::from("/project-path"),
+            sessions: vec![],
+            worktrees: vec![],
+        };
+        let mut session = Session {
+            id: Uuid::new_v4(),
+            project_id: None,
+            name: String::new(),
+            path: Some(String::from("/session-path")),
+            worktree: Some(Worktree {
+                name: String::new(),
+                path: String::from("/worktree-path"),
+            }),
+        };
+        assert_eq!(
+            get_tmux_session_path(&session, Some(&project)).unwrap(),
+            "/worktree-path"
+        );
+        session.worktree = None;
+        assert_eq!(
+            get_tmux_session_path(&session, Some(&project)).unwrap(),
+            "/session-path"
+        );
+        session.path = None;
+        assert_eq!(
+            get_tmux_session_path(&session, Some(&project)).unwrap(),
+            "/project-path"
+        );
+    }
+    #[test]
+    fn test_get_tmux_session_path_no_path_returns_error() {
+        let session = Session {
+            id: Uuid::new_v4(),
+            project_id: None,
+            name: String::new(),
+            path: None,
+            worktree: None,
+        };
+        assert!(get_tmux_session_path(&session, None).is_err());
+    }
+}
