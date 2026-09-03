@@ -61,10 +61,10 @@ impl App {
         // TODO: For now, we will just replace in state. In future, maybe think
         // about how this can be done with specific field updates. Could be safer.
         self.projects.insert(project.id, project.clone());
-        if let Some(p) = self.projects.get_mut(&project.id) {
-            if !p.path.is_empty() {
-                p.worktrees = fetch_worktrees(&p.path).unwrap_or_default();
-            }
+        if let Some(p) = self.projects.get_mut(&project.id)
+            && !p.path.is_empty()
+        {
+            p.worktrees = fetch_worktrees(&p.path).unwrap_or_default();
         }
         self.persist_state();
         self.broadcast_state()?;
