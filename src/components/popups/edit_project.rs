@@ -39,6 +39,7 @@ impl EditProjectPopup {
                     .required(),
                 FormInput::new()
                     .label(Field::Path.label())
+                    .path()
                     .initial_value(project.path.clone())
                     .required(),
             ]),
