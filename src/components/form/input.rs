@@ -7,7 +7,7 @@ enum TextRule {
 #[derive(Clone)]
 enum InputValidation {
     Text(TextRule),
-    // Boolean,
+    Path,
 }
 
 impl InputValidation {
@@ -15,9 +15,8 @@ impl InputValidation {
         match self {
             InputValidation::Text(rule) => match rule {
                 TextRule::NonEmpty => !value.is_empty(),
-                // TextRule::OneOf(options) => value.is_empty() || options.iter().any(|o| o == value),
             },
-            // InputValidation::Boolean => value == "true" || value == "false",
+            InputValidation::Path => true,
         }
     }
 }
@@ -58,21 +57,10 @@ impl FormInput {
         self
     }
 
-    // pub fn boolean(mut self) -> Self {
-    //     self.input_validations.push(InputValidation::Boolean);
-    //     self
-    // }
-
-    // pub fn one_of(mut self, items: Vec<String>) -> Self {
-    //     self.input_validations
-    //         .push(InputValidation::Text(TextRule::OneOf(items)));
-    //     self
-    // }
-
-    // pub fn dependant_on(mut self, dependant_on: (usize, bool)) -> Self {
-    //     self.dependant_on = Some(dependant_on);
-    //     self
-    // }
+    pub fn path(mut self) -> Self {
+        self.input_validations.push(InputValidation::Path);
+        self
+    }
 
     pub fn readonly(mut self) -> Self {
         self.readonly = true;
@@ -82,16 +70,14 @@ impl FormInput {
     pub fn is_text(&self) -> bool {
         self.input_validations
             .iter()
-            .any(|v| matches!(v, InputValidation::Text(_)))
+            .any(|v| matches!(v, InputValidation::Text(_) | InputValidation::Path))
     }
 
-    // TODO: we shouldn't be able to add more than one if Boolean is in there (update here and in
-    // the boolean() method)
-    // pub fn is_boolean(&self) -> bool {
-    //     self.input_validations
-    //         .iter()
-    //         .any(|v| matches!(v, InputValidation::Boolean))
-    // }
+    pub fn is_path(&self) -> bool {
+        self.input_validations
+            .iter()
+            .any(|v| matches!(v, InputValidation::Path))
+    }
 
     pub fn is_valid(&self, value: &str) -> bool {
         self.input_validations
@@ -110,11 +96,4 @@ mod tests {
         assert!(form_input.is_valid("hello world"));
         assert!(!form_input.is_valid(""));
     }
-
-    // #[test]
-    // fn test_validate_boolean_input() {
-    //     let form_input: FormInput = FormInput::new().boolean();
-    //     assert!(form_input.is_valid("true"));
-    //     assert!(form_input.is_valid("false"));
-    // }
 }

@@ -38,6 +38,7 @@ impl NewSessionPopup {
                     .required(),
                 FormInput::new()
                     .label(Field::Path.label().to_string())
+                    .path()
                     .required(),
             ]),
         }

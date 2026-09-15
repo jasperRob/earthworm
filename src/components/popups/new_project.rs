@@ -39,6 +39,7 @@ impl NewProjectPopup {
                     .required(),
                 FormInput::new()
                     .label(Field::Path.label())
+                    .path()
                     .initial_value(String::default())
                     .required(),
             ]),

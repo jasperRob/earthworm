@@ -1,3 +1,5 @@
+use std::{fs, path::Path};
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -31,6 +33,7 @@ pub struct FormInputState {
     pub cursor_position: usize,
     pub is_valid: bool,
     pub hidden: bool,
+    pub suggested_path: Option<String>,
 }
 
 pub struct Form {
@@ -91,6 +94,7 @@ impl Form {
                 cursor_position: form_input.initial_value.chars().count(), // no non-ascii support
                 is_valid: false,
                 hidden: false,
+                suggested_path: None,
             })
         }
         self.form_input_states = form_input_states;
@@ -156,7 +160,7 @@ impl Form {
                 if state.form_input.readonly {
                     return FormEvent::Continue;
                 }
-                if state.form_input.is_text() {
+                if state.form_input.is_text() || state.form_input.is_path() {
                     let byte_idx = state
                         .value
                         .char_indices()
@@ -164,6 +168,9 @@ impl Form {
                         .map(|(i, _)| i)
                         .unwrap_or(state.value.len());
                     state.value.insert(byte_idx, c);
+                    if state.form_input.is_path() {
+                        state.suggested_path = Some(Self::return_suggested(state.value.clone()));
+                    }
                     self.move_cursor_right();
                 }
                 FormEvent::Continue
@@ -179,28 +186,29 @@ impl Form {
                         state.value.char_indices().nth(state.cursor_position - 1)
                 {
                     state.value.remove(byte_idx);
+                    if state.form_input.is_path() {
+                        state.suggested_path = Some(Self::return_suggested(state.value.clone()));
+                    }
                     self.move_cursor_left();
                 }
                 FormEvent::Continue
             }
             KeyCode::Left => {
-                // let state = &mut self.form_input_states[self.focused];
-                // if state.form_input.is_boolean() && state.value == "true" {
-                //     state.value = "false".to_string();
-                // } else if state.form_input.is_text() {
-                //     self.move_cursor_left();
-                // }
                 self.move_cursor_left();
                 FormEvent::Continue
             }
             KeyCode::Right => {
-                // let state = &mut self.form_input_states[self.focused];
-                // if state.form_input.is_boolean() && state.value == "false" {
-                //     state.value = "true".to_string();
-                // } else if state.form_input.is_text() {
-                //     self.move_cursor_right();
-                // }
-                self.move_cursor_right();
+                let state = &mut self.form_input_states[self.focused];
+                if state.form_input.is_path()
+                    && state.cursor_position == state.value.chars().count()
+                    && let Some(suggestion) = &state.suggested_path
+                {
+                    state.value.push_str(suggestion);
+                    state.suggested_path = Some(Self::return_suggested(state.value.clone()));
+                    self.move_cursor_end();
+                } else {
+                    self.move_cursor_right();
+                }
                 FormEvent::Continue
             }
             KeyCode::Enter => FormEvent::Submit,
@@ -282,14 +290,13 @@ impl Form {
         } else {
             Style::default()
         };
-        let value_span = Span::raw(state.value.clone());
-        // if state.form_input.is_boolean() {
-        //     let span_content = if state.value == "true" { "[X]" } else { "[ ]" };
-        //     value_span = Span::raw(span_content);
-        // }
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {}: ", state.form_input.label), label_style),
-            value_span,
+            Span::raw(state.value.clone()),
+            Span::styled(
+                state.suggested_path.clone().unwrap_or(String::from("")),
+                Style::default().fg(ratatui::style::Color::DarkGray),
+            ),
         ]))
     }
 
@@ -345,6 +352,7 @@ impl Form {
         });
     }
 
+    // TODO: These should take a form input state as a param. The use of self should be separated
     fn move_cursor_left(&mut self) {
         let moved = self.form_input_states[self.focused]
             .cursor_position
@@ -361,11 +369,59 @@ impl Form {
         self.form_input_states[self.focused].cursor_position = clamped;
     }
 
+    fn move_cursor_end(&mut self) {
+        let pos = self.form_input_states[self.focused].value.chars().count();
+        self.form_input_states[self.focused].cursor_position = pos;
+    }
+
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(
             0,
             self.form_input_states[self.focused].value.chars().count(),
         )
+    }
+
+    fn return_suggested(input: String) -> String {
+        if input.ends_with("/") {
+            return String::new();
+        }
+        let path = Path::new(&input);
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+
+        let file_name = match path.file_name() {
+            Some(name) => name,
+            None => return String::new(),
+        };
+
+        let entries = match fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(_) => return String::new(),
+        };
+
+        let matches: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .as_encoded_bytes()
+                    .starts_with(file_name.as_encoded_bytes())
+            })
+            .collect();
+
+        matches
+            .first()
+            .and_then(|e| {
+                let full_name = e.file_name().to_string_lossy().to_string();
+                let prefix = file_name.to_string_lossy();
+
+                // Strip the prefix that was already typed
+                full_name
+                    .strip_prefix(prefix.as_ref())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default()
     }
 
     pub fn value(&self, index: usize) -> String {
@@ -573,28 +629,6 @@ mod tests {
         assert_eq!(form.focused, 0);
     }
 
-    // #[test]
-    // fn test_right_arrow_toggles_boolean_input_true() {
-    //     let mut form: Form = Form::standard().inputs(vec![
-    //         FormInput::new()
-    //             .boolean()
-    //             .initial_value(String::from("false")),
-    //     ]);
-    //     form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
-    //     assert_eq!(form.form_input_states[0].value, "true");
-    // }
-
-    // #[test]
-    // fn test_left_arrow_toggles_boolean_input_false() {
-    //     let mut form: Form = Form::standard().inputs(vec![
-    //         FormInput::new()
-    //             .boolean()
-    //             .initial_value(String::from("true")),
-    //     ]);
-    //     form.match_standard_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
-    //     assert_eq!(form.form_input_states[0].value, "false");
-    // }
-
     #[test]
     fn test_readonly_input_is_not_focusable() {
         let mut form: Form = Form::standard().inputs(vec![
@@ -621,5 +655,67 @@ mod tests {
         assert_eq!(form.form_input_states[0].value, "hello");
         form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
         assert_eq!(form.form_input_states[0].value, "hello");
+    }
+
+    // TODO: Should recompute the suggestion on any character or backspace, and should only
+    // autocomplete if the right key is pressed from the end of the string
+    //
+    // TODO:
+    // This should also work fine with unicode chars
+
+    #[test]
+    fn test_right_arrow_at_string_end_autocompletes_path() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].value = String::from("./");
+        form.form_input_states[0].cursor_position = 2;
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()));
+        assert_eq!(
+            form.form_input_states[0].suggested_path.as_deref(),
+            Some("rc")
+        );
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "./src");
+    }
+
+    #[test]
+    fn test_right_arrow_mid_string_does_not_autocompletes() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].value = String::from(".s");
+        form.form_input_states[0].cursor_position = 1;
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        assert_eq!(
+            form.form_input_states[0].suggested_path.as_deref(),
+            Some("rc")
+        );
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].value, "./s");
+    }
+
+    #[test]
+    fn test_backspace_at_string_end_recomputes_suggestion() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].value = String::from("./sx");
+        form.form_input_states[0].cursor_position = 4;
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(
+            form.form_input_states[0].suggested_path.as_deref(),
+            Some("rc")
+        );
+    }
+
+    #[test]
+    fn test_backspace_mid_string_recomputes_suggestion() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].value = String::from("./xs");
+        form.form_input_states[0].cursor_position = 3;
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(
+            form.form_input_states[0].suggested_path.as_deref(),
+            Some("rc")
+        );
     }
 }
