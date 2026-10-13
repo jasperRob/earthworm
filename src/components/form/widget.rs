@@ -60,43 +60,29 @@ pub struct Form {
 }
 
 impl Form {
-    pub fn standard() -> Self {
+    fn new(form_type: FormType) -> Self {
         let (suggestion_tx, suggestion_rx) = channel();
         Self {
             title: String::default(),
             body: String::default(),
-            form_type: FormType::Standard,
+            form_type,
             form_input_states: vec![],
             focused: 0,
             suggestion_tx,
             suggestion_rx,
         }
+    }
+
+    pub fn standard() -> Self {
+        Self::new(FormType::Standard)
     }
 
     pub fn confirmation() -> Self {
-        let (suggestion_tx, suggestion_rx) = channel();
-        Self {
-            title: String::default(),
-            body: String::default(),
-            form_type: FormType::Confirmation,
-            form_input_states: vec![],
-            focused: 0,
-            suggestion_tx,
-            suggestion_rx,
-        }
+        Self::new(FormType::Confirmation)
     }
 
     pub fn custom() -> Self {
-        let (suggestion_tx, suggestion_rx) = channel();
-        Self {
-            title: String::default(),
-            body: String::default(),
-            form_type: FormType::Custom,
-            form_input_states: vec![],
-            focused: 0,
-            suggestion_tx,
-            suggestion_rx,
-        }
+        Self::new(FormType::Custom)
     }
 
     pub fn title(mut self, title: &str) -> Self {
