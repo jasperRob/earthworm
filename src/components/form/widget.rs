@@ -1,4 +1,8 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::mpsc::{Receiver, Sender, channel},
+};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -34,6 +38,15 @@ pub struct FormInputState {
     pub is_valid: bool,
     pub hidden: bool,
     pub suggested_path: Option<String>,
+    /// Id of the latest suggestion requested for this input; older results are discarded
+    pub suggestion_request: u64,
+}
+
+/// A path suggestion computed off the UI thread
+struct PathSuggestion {
+    input_index: usize,
+    request: u64,
+    suggestion: String,
 }
 
 pub struct Form {
@@ -42,36 +55,47 @@ pub struct Form {
     form_type: FormType,
     form_input_states: Vec<FormInputState>,
     focused: usize,
+    suggestion_tx: Sender<PathSuggestion>,
+    suggestion_rx: Receiver<PathSuggestion>,
 }
 
 impl Form {
     pub fn standard() -> Self {
+        let (suggestion_tx, suggestion_rx) = channel();
         Self {
             title: String::default(),
             body: String::default(),
             form_type: FormType::Standard,
             form_input_states: vec![],
             focused: 0,
+            suggestion_tx,
+            suggestion_rx,
         }
     }
 
     pub fn confirmation() -> Self {
+        let (suggestion_tx, suggestion_rx) = channel();
         Self {
             title: String::default(),
             body: String::default(),
             form_type: FormType::Confirmation,
             form_input_states: vec![],
             focused: 0,
+            suggestion_tx,
+            suggestion_rx,
         }
     }
 
     pub fn custom() -> Self {
+        let (suggestion_tx, suggestion_rx) = channel();
         Self {
             title: String::default(),
             body: String::default(),
             form_type: FormType::Custom,
             form_input_states: vec![],
             focused: 0,
+            suggestion_tx,
+            suggestion_rx,
         }
     }
 
@@ -95,6 +119,7 @@ impl Form {
                 is_valid: false,
                 hidden: false,
                 suggested_path: None,
+                suggestion_request: 0,
             })
         }
         self.form_input_states = form_input_states;
@@ -107,6 +132,7 @@ impl Form {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.apply_suggestions();
         match self.form_type {
             FormType::Standard => {
                 self.validate();
@@ -119,6 +145,7 @@ impl Form {
         }
     }
     pub fn handle_key(&mut self, key: KeyEvent) -> FormEvent {
+        self.apply_suggestions();
         match self.form_type {
             FormType::Standard => self.match_standard_input_key(key),
             FormType::Confirmation => self.match_confirmation_input_key(key),
@@ -168,10 +195,11 @@ impl Form {
                         .map(|(i, _)| i)
                         .unwrap_or(state.value.len());
                     state.value.insert(byte_idx, c);
-                    if state.form_input.is_path() {
-                        state.suggested_path = Some(Self::return_suggested(state.value.clone()));
-                    }
+                    let is_path = state.form_input.is_path();
                     self.move_cursor_right();
+                    if is_path {
+                        self.request_suggestion();
+                    }
                 }
                 FormEvent::Continue
             }
@@ -186,10 +214,11 @@ impl Form {
                         state.value.char_indices().nth(state.cursor_position - 1)
                 {
                     state.value.remove(byte_idx);
-                    if state.form_input.is_path() {
-                        state.suggested_path = Some(Self::return_suggested(state.value.clone()));
-                    }
+                    let is_path = state.form_input.is_path();
                     self.move_cursor_left();
+                    if is_path {
+                        self.request_suggestion();
+                    }
                 }
                 FormEvent::Continue
             }
@@ -204,8 +233,8 @@ impl Form {
                     && let Some(suggestion) = &state.suggested_path
                 {
                     state.value.push_str(suggestion);
-                    state.suggested_path = Some(Self::return_suggested(state.value.clone()));
                     self.move_cursor_end();
+                    self.request_suggestion();
                 } else {
                     self.move_cursor_right();
                 }
@@ -381,6 +410,35 @@ impl Form {
         )
     }
 
+    /// Computes a suggestion for the focused input off the UI thread, as reading the
+    /// directory can be slow. The stale suggestion is hidden until the new one arrives.
+    fn request_suggestion(&mut self) {
+        let input_index = self.focused;
+        let state = &mut self.form_input_states[input_index];
+        state.suggested_path = None;
+        state.suggestion_request += 1;
+        let request = state.suggestion_request;
+        let input = state.value.clone();
+        let tx = self.suggestion_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(PathSuggestion {
+                input_index,
+                request,
+                suggestion: Self::return_suggested(input),
+            });
+        });
+    }
+
+    fn apply_suggestions(&mut self) {
+        while let Ok(result) = self.suggestion_rx.try_recv() {
+            if let Some(state) = self.form_input_states.get_mut(result.input_index)
+                && state.suggestion_request == result.request
+            {
+                state.suggested_path = Some(result.suggestion);
+            }
+        }
+    }
+
     fn return_suggested(input: String) -> String {
         if input.ends_with("/") {
             return String::new();
@@ -401,17 +459,13 @@ impl Form {
             Err(_) => return String::new(),
         };
 
-        let matches: Vec<_> = entries
+        entries
             .filter_map(|e| e.ok())
-            .filter(|e| {
+            .find(|e| {
                 e.file_name()
                     .as_encoded_bytes()
                     .starts_with(file_name.as_encoded_bytes())
             })
-            .collect();
-
-        matches
-            .first()
             .and_then(|e| {
                 let full_name = e.file_name().to_string_lossy().to_string();
                 let prefix = file_name.to_string_lossy();
@@ -431,9 +485,21 @@ impl Form {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crossterm::event::KeyModifiers;
 
     use super::*;
+
+    /// Waits for the pending path suggestion to be computed, then applies it
+    fn settle_suggestion(form: &mut Form) {
+        let result = form
+            .suggestion_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        form.suggestion_tx.send(result).unwrap();
+        form.apply_suggestions();
+    }
 
     #[test]
     fn test_type_char_at_string_end() {
@@ -663,13 +729,14 @@ mod tests {
     // TODO:
     // This should also work fine with unicode chars
 
-    #[test]
-    fn test_right_arrow_at_string_end_autocompletes_path() {
+    #[tokio::test]
+    async fn test_right_arrow_at_string_end_autocompletes_path() {
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
         form.form_input_states[0].value = String::from("./");
         form.form_input_states[0].cursor_position = 2;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()));
+        settle_suggestion(&mut form);
         assert_eq!(
             form.form_input_states[0].suggested_path.as_deref(),
             Some("rc")
@@ -678,13 +745,14 @@ mod tests {
         assert_eq!(form.form_input_states[0].value, "./src");
     }
 
-    #[test]
-    fn test_right_arrow_mid_string_does_not_autocompletes() {
+    #[tokio::test]
+    async fn test_right_arrow_mid_string_does_not_autocompletes() {
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
         form.form_input_states[0].value = String::from(".s");
         form.form_input_states[0].cursor_position = 1;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+        settle_suggestion(&mut form);
         assert_eq!(
             form.form_input_states[0].suggested_path.as_deref(),
             Some("rc")
@@ -693,29 +761,61 @@ mod tests {
         assert_eq!(form.form_input_states[0].value, "./s");
     }
 
-    #[test]
-    fn test_backspace_at_string_end_recomputes_suggestion() {
+    #[tokio::test]
+    async fn test_backspace_at_string_end_recomputes_suggestion() {
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
         form.form_input_states[0].value = String::from("./sx");
         form.form_input_states[0].cursor_position = 4;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        settle_suggestion(&mut form);
         assert_eq!(
             form.form_input_states[0].suggested_path.as_deref(),
             Some("rc")
         );
     }
 
-    #[test]
-    fn test_backspace_mid_string_recomputes_suggestion() {
+    #[tokio::test]
+    async fn test_backspace_mid_string_recomputes_suggestion() {
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
         form.form_input_states[0].value = String::from("./xs");
         form.form_input_states[0].cursor_position = 3;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        settle_suggestion(&mut form);
         assert_eq!(
             form.form_input_states[0].suggested_path.as_deref(),
             Some("rc")
         );
+    }
+
+    #[tokio::test]
+    async fn test_typing_hides_suggestion_until_recomputed() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].value = String::from("./s");
+        form.form_input_states[0].cursor_position = 3;
+        form.form_input_states[0].suggested_path = Some(String::from("rc"));
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+        settle_suggestion(&mut form);
+        assert_eq!(
+            form.form_input_states[0].suggested_path.as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn test_stale_suggestion_is_discarded() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
+        form.form_input_states[0].suggestion_request = 2;
+        form.suggestion_tx
+            .send(PathSuggestion {
+                input_index: 0,
+                request: 1,
+                suggestion: String::from("stale"),
+            })
+            .unwrap();
+        form.apply_suggestions();
+        assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
     }
 }
