@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
@@ -12,15 +12,14 @@ use crate::{
     action::Action,
     components::{Component, fps::FpsCounter, home::Home, notification::Notification},
     config::Config,
-    git::fetch_worktrees,
     project::Project,
     session::Session,
     state::{AppState, load_state, save_state},
-    tmux::{fetch_tmux_sessions, get_tmux_session_name},
     tui::{Event, Tui},
 };
 
 mod handlers;
+mod jobs;
 
 pub struct App {
     config: Config,
@@ -84,8 +83,8 @@ impl App {
         }
 
         self.load_persisted_state();
-        self.fetch_and_map_tmux_sessions()?;
         self.broadcast_state()?;
+        self.start_tmux_sync();
 
         let action_tx = self.action_tx.clone();
         loop {
@@ -203,6 +202,18 @@ impl App {
                 Action::SubmitProject(ref project) => self.on_submit_project(project),
                 Action::UpdateProject(ref project) => self.on_update_project(project),
                 Action::RemoveProject(ref project) => self.on_remove_project(project),
+                Action::ProjectCreationFinished {
+                    ref project,
+                    ref result,
+                } => self.on_project_creation_finished(project, result),
+                Action::ProjectUpdateFinished {
+                    ref project,
+                    ref result,
+                } => self.on_project_update_finished(project, result),
+                Action::ProjectRemovalFinished {
+                    project_id,
+                    ref result,
+                } => self.on_project_removal_finished(project_id, result),
                 Action::SubmitSession(ref session) => self.on_submit_session(session),
                 Action::UpdateSession(ref session) => self.on_update_session(session),
                 Action::AttachSession(ref session) => {
@@ -216,9 +227,29 @@ impl App {
                     result
                 }
                 Action::RemoveSession(ref session) => self.on_remove_session(session),
+                Action::SessionCreationFinished {
+                    ref session,
+                    ref result,
+                } => self.on_session_creation_finished(session, result),
+                Action::SessionUpdateFinished {
+                    ref session,
+                    ref result,
+                } => self.on_session_update_finished(session, result),
+                Action::SessionRemovalFinished {
+                    ref session,
+                    ref result,
+                } => self.on_session_removal_finished(session, result),
                 Action::RemoveWorktree(ref project, ref worktree) => {
                     self.on_remove_worktree(project, worktree)
                 }
+                Action::WorktreeRemovalFinished {
+                    project_id,
+                    ref result,
+                } => self.on_worktree_removal_finished(project_id, result),
+                Action::TmuxSyncFinished {
+                    ref known_session_ids,
+                    ref result,
+                } => self.on_tmux_sync_finished(known_session_ids, result),
                 _ => Ok(()),
             };
             if let Err(e) = outcome {
@@ -261,59 +292,6 @@ impl App {
         } else {
             Ok(None)
         }
-    }
-
-    /// Reconciles the app's in-memory session state with what tmux actually has running.
-    fn fetch_and_map_tmux_sessions(&mut self) -> color_eyre::Result<()> {
-        let active_session_names: HashSet<String> = fetch_tmux_sessions()?.into_iter().collect();
-
-        let session_names_in_state: HashSet<String> = self
-            .sessions
-            .values()
-            .filter_map(|s| match s.project_id {
-                None => Some(get_tmux_session_name(s, None)),
-                Some(project_id) => self
-                    .projects
-                    .get(&project_id)
-                    .map(|project| get_tmux_session_name(s, Some(project))),
-            })
-            .collect();
-
-        // Prune dead sessions
-        self.sessions.retain(|_id, session| {
-            let Some(project_id) = session.project_id else {
-                return true;
-            };
-            let Some(project) = self.projects.get(&project_id) else {
-                return false;
-            };
-            active_session_names.contains(&get_tmux_session_name(session, Some(project)))
-        });
-
-        // Capture unmapped tmux sessions
-        for name in &active_session_names {
-            if !session_names_in_state.contains(name) {
-                let uuid = Uuid::new_v4();
-                self.sessions.insert(
-                    uuid,
-                    Session {
-                        id: uuid,
-                        project_id: None,
-                        name: name.clone(),
-                        path: None,
-                        worktree: None,
-                    },
-                );
-            }
-        }
-
-        for project in self.projects.values_mut() {
-            if !project.path.is_empty() {
-                project.worktrees = fetch_worktrees(&project.path).unwrap_or_default();
-            }
-        }
-
-        Ok(())
     }
 
     fn broadcast_state(&self) -> color_eyre::Result<()> {

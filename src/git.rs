@@ -100,3 +100,67 @@ pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> color_eyre::Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use crate::git::{create_worktree, fetch_worktrees, remove_worktree};
+
+    fn init_repo() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let repo = root.join("repo");
+        let git = |args: &[&str]| {
+            assert!(Command::new("git").args(args).status().unwrap().success());
+        };
+        git(&["init", "-q", repo.to_str().unwrap()]);
+        git(&[
+            "-C",
+            repo.to_str().unwrap(),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+        (dir, root)
+    }
+
+    #[test]
+    fn test_remove_worktree_removes_it_from_list() {
+        let (_dir, root) = init_repo();
+        let repo = root.join("repo");
+        let wt = root.join("feat");
+        let (repo, wt) = (repo.to_str().unwrap(), wt.to_str().unwrap());
+
+        create_worktree(repo, "feat", wt).unwrap();
+        assert!(fetch_worktrees(repo).unwrap().iter().any(|w| w.path == wt));
+
+        remove_worktree(repo, wt).unwrap();
+        assert!(!fetch_worktrees(repo).unwrap().iter().any(|w| w.path == wt));
+    }
+
+    #[test]
+    fn test_remove_worktree_nonexistent_returns_error() {
+        let (_dir, root) = init_repo();
+        let repo = root.join("repo");
+        assert!(remove_worktree(repo.to_str().unwrap(), "/does/not/exist").is_err());
+    }
+
+    #[test]
+    fn test_remove_worktree_with_untracked_files_returns_error() {
+        let (_dir, root) = init_repo();
+        let repo = root.join("repo");
+        let wt = root.join("feat");
+
+        create_worktree(repo.to_str().unwrap(), "feat", wt.to_str().unwrap()).unwrap();
+        std::fs::write(wt.join("dirty.txt"), "x").unwrap();
+        assert!(remove_worktree(repo.to_str().unwrap(), wt.to_str().unwrap()).is_err());
+    }
+}

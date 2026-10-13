@@ -44,6 +44,9 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
 tui-input = "0.15.3"
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [build-dependencies]
 anyhow = "1.0.90"
 vergen-gix = { version = "9.1.0", features = ["build", "cargo"] }
