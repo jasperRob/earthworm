@@ -15,7 +15,7 @@ use crate::{
     pending::{JobId, Pending},
     project::Project,
     session::Session,
-    state::{AppState, load_state, save_state},
+    state::{AppState, backup_state, load_state, save_state},
     tui::{Event, Tui},
 };
 
@@ -37,6 +37,7 @@ pub struct App {
     sessions: HashMap<Uuid, Session>,
     pending: HashMap<JobId, Pending>,
     next_job_id: JobId,
+    persist_disabled: bool,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ impl App {
             sessions: HashMap::default(),
             pending: HashMap::default(),
             next_job_id: JobId::default(),
+            persist_disabled: false,
         })
     }
 
@@ -322,6 +324,9 @@ impl App {
     }
 
     fn persist_state(&mut self) {
+        if self.persist_disabled {
+            return;
+        }
         let state = AppState {
             projects: self.projects.clone(),
             sessions: self.sessions.clone(),
@@ -337,9 +342,18 @@ impl App {
                 self.projects = state.projects;
                 self.sessions = state.sessions;
             }
-            Err(e) => {
-                let _ = self.action_tx.send(Action::Error(e.to_string()));
-            }
+            Err(e) => match backup_state() {
+                Ok(backup) => self.dispatch_error(format!(
+                    "failed to load state ({e}); moved to {}",
+                    backup.display()
+                )),
+                Err(backup_err) => {
+                    self.persist_disabled = true;
+                    self.dispatch_error(format!(
+                        "failed to load state ({e}); backup failed ({backup_err}), saving disabled"
+                    ));
+                }
+            },
         }
     }
 
