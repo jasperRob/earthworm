@@ -123,7 +123,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("project-name"),
             path: String::new(),
-            sessions: vec![],
             worktrees: vec![],
         };
         let session = Session {
@@ -155,7 +154,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::new(),
             path: String::from("/project-path"),
-            sessions: vec![],
             worktrees: vec![],
         };
         let mut session = Session {

@@ -57,7 +57,6 @@ impl Popup for NewProjectPopup {
                     id: Uuid::new_v4(),
                     name,
                     path,
-                    sessions: vec![],
                     // TODO: should init based on existing worktrees for git repo
                     worktrees: vec![],
                 };
