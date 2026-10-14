@@ -22,6 +22,9 @@ use crate::{
 mod handlers;
 mod jobs;
 
+/// How often tmux is re-synced, to pick up sessions created or killed outside the app
+const TMUX_SYNC_INTERVAL_SECS: f64 = 5.0;
+
 pub struct App {
     config: Config,
     tick_rate: f64,
@@ -37,6 +40,7 @@ pub struct App {
     sessions: HashMap<Uuid, Session>,
     pending: HashMap<JobId, Pending>,
     next_job_id: JobId,
+    ticks_since_sync: u64,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,6 +71,7 @@ impl App {
             sessions: HashMap::default(),
             pending: HashMap::default(),
             next_job_id: JobId::default(),
+            ticks_since_sync: 0,
         })
     }
 
@@ -178,7 +183,12 @@ impl App {
             let outcome = match action {
                 Action::Tick => {
                     // self.last_tick_key_events.drain(..);
-                    Ok(())
+                    self.ticks_since_sync += 1;
+                    if self.ticks_since_sync >= self.sync_interval_ticks() {
+                        self.start_tmux_sync()
+                    } else {
+                        Ok(())
+                    }
                 }
                 Action::Quit => {
                     self.should_quit = true;
@@ -217,7 +227,8 @@ impl App {
                         self.action_tx.send(Action::ClearScreen)?;
                         self.action_tx.send(Action::Render)?;
                     }
-                    result
+                    // Sessions may have been created or killed while attached
+                    result.and_then(|()| self.start_tmux_sync())
                 }
                 Action::RemoveSession(ref session) => self.on_remove_session(session),
                 Action::RemoveWorktree(ref project, ref worktree) => {
@@ -226,7 +237,7 @@ impl App {
                 Action::JobFinished(id, ref completion) => {
                     self.pending.remove(&id);
                     // Handled in place, so the job's outcome and its end are broadcast together
-                    let outcome = self.handle_job_completion(completion);
+                    let outcome = self.handle_job_completion(id, completion);
                     self.broadcast_state()?;
                     outcome
                 }
@@ -244,7 +255,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_job_completion(&mut self, action: &Action) -> color_eyre::Result<()> {
+    fn handle_job_completion(&mut self, id: JobId, action: &Action) -> color_eyre::Result<()> {
         match *action {
             Action::ProjectCreationFinished {
                 ref project,
@@ -277,9 +288,14 @@ impl App {
             Action::TmuxSyncFinished {
                 ref known_session_ids,
                 ref result,
-            } => self.on_tmux_sync_finished(known_session_ids, result),
+            } => self.on_tmux_sync_finished(id, known_session_ids, result),
             _ => Err(eyre!("Unexpected job completion: {action}")),
         }
+    }
+
+    /// Number of ticks between periodic tmux syncs
+    fn sync_interval_ticks(&self) -> u64 {
+        (TMUX_SYNC_INTERVAL_SECS * self.tick_rate).round().max(1.0) as u64
     }
 
     fn handle_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {

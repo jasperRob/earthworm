@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use color_eyre::eyre::{Result, eyre};
+use tokio::sync::mpsc::UnboundedSender;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::App;
@@ -8,7 +10,7 @@ use super::App;
 use crate::{
     action::{Action, TmuxSnapshot},
     git::{create_worktree, fetch_worktrees, remove_worktree},
-    pending::{Activity, Pending, PendingTarget},
+    pending::{Activity, JobId, Pending, PendingTarget},
     project::Project,
     session::Session,
     tmux::{
@@ -22,9 +24,10 @@ impl App {
     pub(super) fn on_submit_project(&mut self, project: &Project) -> Result<()> {
         let project = project.clone();
         let repo_path = project.path.clone();
+        let error_tx = self.action_tx.clone();
         self.spawn_tracked_job(
             Pending::creating_project(&project),
-            move || Ok(refresh_worktrees(&repo_path)),
+            move || Ok(refresh_worktrees(&repo_path, &error_tx)),
             move |result| Action::ProjectCreationFinished { project, result },
         )
     }
@@ -60,12 +63,13 @@ impl App {
         };
         let repo_path = project.path.clone();
         let project = project.clone();
+        let error_tx = self.action_tx.clone();
 
         self.spawn_tracked_job(
             Pending::new(PendingTarget::Project(project.id), Activity::Updating),
             move || {
                 rename_tmux_sessions(renames)?;
-                Ok(refresh_worktrees(&repo_path))
+                Ok(refresh_worktrees(&repo_path, &error_tx))
             },
             move |result| Action::ProjectUpdateFinished { project, result },
         )
@@ -145,6 +149,7 @@ impl App {
         let tmux_session_name = get_tmux_session_name(session, project);
         let tmux_session_path = get_tmux_session_path(session, project)?;
         let session = session.clone();
+        let error_tx = self.action_tx.clone();
 
         self.spawn_tracked_job(
             Pending::creating_session(&session),
@@ -154,7 +159,7 @@ impl App {
                 }
                 // Failure to create the tmux session leaves the worktree intact
                 new_tmux_session(tmux_session_name, tmux_session_path)?;
-                Ok(refresh_repo_path.map(|p| fetch_worktrees(&p).unwrap_or_default()))
+                Ok(refresh_repo_path.and_then(|p| refresh_worktrees(&p, &error_tx)))
             },
             move |result| Action::SessionCreationFinished { session, result },
         )
@@ -270,7 +275,14 @@ impl App {
     }
 
     /// Reconciles the app's in-memory session state with what tmux actually has running.
+    ///
+    /// Skipped while any job is pending, as its outcome could not be told apart from a change
+    /// made outside the app. The periodic sync retries on a later tick.
     pub(super) fn start_tmux_sync(&mut self) -> Result<()> {
+        if !self.pending.is_empty() {
+            return Ok(());
+        }
+        self.ticks_since_sync = 0;
         // Only sessions known now may be pruned; ones created meanwhile are newer than the fetch
         let known_session_ids: HashSet<Uuid> = self.sessions.keys().copied().collect();
         let repo_paths: Vec<(Uuid, String)> = self
@@ -286,7 +298,12 @@ impl App {
                 let active_session_names = fetch_tmux_sessions()?;
                 let worktrees = repo_paths
                     .into_iter()
-                    .map(|(id, path)| (id, fetch_worktrees(&path).unwrap_or_default()))
+                    .map(|(id, path)| {
+                        let worktrees = fetch_worktrees(&path)
+                            .inspect_err(|e| warn!("Keeping previous worktrees of {path}: {e}"))
+                            .ok();
+                        (id, worktrees)
+                    })
                     .collect();
                 Ok((active_session_names, worktrees))
             },
@@ -299,22 +316,42 @@ impl App {
 
     pub(super) fn on_tmux_sync_finished(
         &mut self,
+        job_id: JobId,
         known_session_ids: &HashSet<Uuid>,
         result: &Result<TmuxSnapshot, String>,
     ) -> Result<()> {
+        // The sync started with no other job pending, so if none has started since, the state
+        // is unchanged by the app since the snapshot was taken
+        if self.next_job_id != job_id + 1 {
+            debug!("Discarding tmux sync that overlapped other jobs");
+            return Ok(());
+        }
+        let sessions_before = self.sessions.clone();
         apply_tmux_sync(
             &mut self.projects,
             &mut self.sessions,
             known_session_ids,
             result,
         )?;
+        // Persisted state only changes along with sessions; worktrees are not persisted
+        if self.sessions != sessions_before {
+            self.persist_state();
+        }
         Ok(())
     }
 }
 
-/// Worktrees to store for a project, or None if it has no repo path to read them from
-fn refresh_worktrees(repo_path: &str) -> Option<Vec<Worktree>> {
-    (!repo_path.is_empty()).then(|| fetch_worktrees(repo_path).unwrap_or_default())
+/// Worktrees to store for a project, or None to keep its current ones: it has no repo path, or
+/// the fetch failed. A failure is reported as an error, without failing the surrounding job.
+fn refresh_worktrees(repo_path: &str, error_tx: &UnboundedSender<Action>) -> Option<Vec<Worktree>> {
+    if repo_path.is_empty() {
+        return None;
+    }
+    fetch_worktrees(repo_path)
+        .inspect_err(|e| {
+            let _ = error_tx.send(Action::Error(e.to_string()));
+        })
+        .ok()
 }
 
 fn rename_tmux_sessions(renames: Vec<(String, String)>) -> Result<()> {
@@ -423,19 +460,26 @@ fn apply_tmux_sync(
         })
         .collect();
 
-    // Prune dead sessions
-    sessions.retain(|id, session| {
-        if !known_session_ids.contains(id) {
-            return true;
-        }
-        let Some(project_id) = session.project_id else {
-            return true;
-        };
-        let Some(project) = projects.get(&project_id) else {
-            return false;
-        };
-        active_session_names.contains(get_tmux_session_name(session, Some(project)).as_str())
-    });
+    // Prune dead sessions; only known ones, as ones created meanwhile are newer than the fetch
+    let dead_session_ids: HashSet<Uuid> = sessions
+        .values()
+        .filter(|s| known_session_ids.contains(&s.id))
+        .filter(|s| {
+            let project = match s.project_id {
+                None => None,
+                Some(project_id) => match projects.get(&project_id) {
+                    Some(project) => Some(project),
+                    None => return true,
+                },
+            };
+            !active_session_names.contains(get_tmux_session_name(s, project).as_str())
+        })
+        .map(|s| s.id)
+        .collect();
+    sessions.retain(|id, _| !dead_session_ids.contains(id));
+    for project in projects.values_mut() {
+        project.sessions.retain(|id| !dead_session_ids.contains(id));
+    }
 
     // Capture unmapped tmux sessions
     for name in active_session_names {
@@ -454,8 +498,11 @@ fn apply_tmux_sync(
         }
     }
 
+    // A project whose worktrees could not be fetched keeps its previous ones
     for (project_id, project_worktrees) in worktrees {
-        if let Some(project) = projects.get_mut(project_id) {
+        if let Some(project) = projects.get_mut(project_id)
+            && let Some(project_worktrees) = project_worktrees
+        {
             project.worktrees = project_worktrees.clone();
         }
     }
@@ -470,10 +517,19 @@ fn apply_session_creation(
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
     let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    // The project may have been removed while the session was being created
+    let project = match session.project_id {
+        None => None,
+        Some(project_id) => Some(projects.get_mut(&project_id).ok_or_else(|| {
+            eyre!(
+                "Project was removed while session {} was being created; \
+                 its tmux session is left running and will be listed as unassigned",
+                session.name
+            )
+        })?),
+    };
     sessions.insert(session.id, session.clone());
-    if let Some(project_id) = session.project_id
-        && let Some(project) = projects.get_mut(&project_id)
-    {
+    if let Some(project) = project {
         project.sessions.push(session.id);
         if let Some(worktrees) = worktrees {
             project.worktrees = worktrees.clone();
@@ -603,6 +659,17 @@ mod tests {
         assert_eq!(err.to_string(), "boom");
         assert!(sessions.is_empty());
         assert_eq!(projects, before);
+    }
+
+    #[test]
+    fn test_apply_session_creation_in_removed_project_changes_nothing() {
+        let mut projects = HashMap::new();
+        let mut sessions = HashMap::new();
+        let s = session(Some(Uuid::new_v4()));
+        let err = apply_session_creation(&mut projects, &mut sessions, &s, &Ok(None)).unwrap_err();
+        assert!(err.to_string().starts_with("Project was removed"));
+        assert!(sessions.is_empty());
+        assert!(projects.is_empty());
     }
 
     #[test]
@@ -758,7 +825,7 @@ mod tests {
             &known,
             &Ok((
                 vec![String::from("project_session"), String::from("stray")],
-                HashMap::from([(id, vec![worktree("new")])]),
+                HashMap::from([(id, Some(vec![worktree("new")]))]),
             )),
         )
         .unwrap();
@@ -766,6 +833,61 @@ mod tests {
         let names: HashSet<&str> = sessions.values().map(|s| s.name.as_str()).collect();
         assert_eq!(names, HashSet::from(["session", "stray"]));
         assert_eq!(projects[&id].worktrees, vec![worktree("new")]);
+    }
+
+    #[test]
+    fn test_apply_tmux_sync_prunes_dead_orphan_and_keeps_live_one() {
+        let dead = session(None);
+        let mut live = session(None);
+        live.name = String::from("live");
+        let mut projects = HashMap::new();
+        let mut sessions = HashMap::from([(dead.id, dead.clone()), (live.id, live.clone())]);
+        let known = HashSet::from([dead.id, live.id]);
+        apply_tmux_sync(
+            &mut projects,
+            &mut sessions,
+            &known,
+            &Ok((vec![String::from("live")], HashMap::new())),
+        )
+        .unwrap();
+        assert_eq!(sessions, HashMap::from([(live.id, live)]));
+    }
+
+    #[test]
+    fn test_apply_tmux_sync_removes_pruned_session_from_its_project() {
+        let mut p = project();
+        let id = p.id;
+        let dead = session(Some(id));
+        let mut live = session(Some(id));
+        live.name = String::from("live");
+        p.sessions = vec![dead.id, live.id];
+        let mut projects = HashMap::from([(id, p)]);
+        let mut sessions = HashMap::from([(dead.id, dead.clone()), (live.id, live.clone())]);
+        let known = HashSet::from([dead.id, live.id]);
+        apply_tmux_sync(
+            &mut projects,
+            &mut sessions,
+            &known,
+            &Ok((vec![String::from("project_live")], HashMap::new())),
+        )
+        .unwrap();
+        assert_eq!(sessions, HashMap::from([(live.id, live.clone())]));
+        assert_eq!(projects[&id].sessions, vec![live.id]);
+    }
+
+    #[test]
+    fn test_apply_tmux_sync_failed_worktree_fetch_keeps_previous_worktrees() {
+        let p = project();
+        let id = p.id;
+        let mut projects = HashMap::from([(id, p)]);
+        apply_tmux_sync(
+            &mut projects,
+            &mut HashMap::new(),
+            &HashSet::new(),
+            &Ok((vec![], HashMap::from([(id, None)]))),
+        )
+        .unwrap();
+        assert_eq!(projects[&id].worktrees, vec![worktree("old")]);
     }
 
     #[test]
