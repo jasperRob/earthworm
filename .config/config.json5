@@ -18,7 +18,8 @@
       "<Space><d>": "CmdDeleteItem",
       "<Space><a>": "CmdAttach",
       "<Space><e>": "CmdEdit",
-      "<Ctrl-i>": "CmdNextSessionHistory",
+      "<Tab>": "CmdNextSessionHistory", // Terminals send Ctrl-i as Tab
+      "<Ctrl-i>": "CmdNextSessionHistory", // Only seen with keyboard enhancement
       "<Ctrl-o>": "CmdPrevSessionHistory",
     },
   }
