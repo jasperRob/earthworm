@@ -11,6 +11,7 @@ mod config;
 mod errors;
 mod git;
 mod logging;
+mod pending;
 mod project;
 mod session;
 mod state;

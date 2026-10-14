@@ -7,8 +7,8 @@ use super::App;
 
 use crate::{
     action::{Action, TmuxSnapshot},
-    app::jobs::spawn_job,
     git::{create_worktree, fetch_worktrees, remove_worktree},
+    pending::{Activity, Pending, PendingTarget},
     project::Project,
     session::Session,
     tmux::{
@@ -22,12 +22,11 @@ impl App {
     pub(super) fn on_submit_project(&mut self, project: &Project) -> Result<()> {
         let project = project.clone();
         let repo_path = project.path.clone();
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::creating_project(&project),
             move || Ok(refresh_worktrees(&repo_path)),
             move |result| Action::ProjectCreationFinished { project, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_project_creation_finished(
@@ -37,7 +36,6 @@ impl App {
     ) -> Result<()> {
         apply_project_change(&mut self.projects, project, result)?;
         self.persist_state();
-        self.broadcast_state()?;
         Ok(())
     }
 
@@ -63,15 +61,14 @@ impl App {
         let repo_path = project.path.clone();
         let project = project.clone();
 
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(PendingTarget::Project(project.id), Activity::Updating),
             move || {
                 rename_tmux_sessions(renames)?;
                 Ok(refresh_worktrees(&repo_path))
             },
             move |result| Action::ProjectUpdateFinished { project, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_project_update_finished(
@@ -81,7 +78,6 @@ impl App {
     ) -> Result<()> {
         apply_project_update(&mut self.projects, project, result)?;
         self.persist_state();
-        self.broadcast_state()?;
         Ok(())
     }
 
@@ -94,8 +90,8 @@ impl App {
             .map(|s| get_tmux_session_name(s, Some(project)))
             .collect();
 
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(PendingTarget::Project(project_id), Activity::Removing),
             move || {
                 let errors: Vec<String> = tmux_session_names
                     .into_iter()
@@ -114,8 +110,7 @@ impl App {
                 Ok(())
             },
             move |result| Action::ProjectRemovalFinished { project_id, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_project_removal_finished(
@@ -126,7 +121,6 @@ impl App {
         // The project is removed even if some of its sessions failed to terminate
         apply_project_removal(&mut self.projects, &mut self.sessions, project_id);
         self.persist_state();
-        self.broadcast_state()?;
         result.as_ref().map_err(|e| eyre!("{e}"))?;
         Ok(())
     }
@@ -152,8 +146,8 @@ impl App {
         let tmux_session_path = get_tmux_session_path(session, project)?;
         let session = session.clone();
 
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::creating_session(&session),
             move || {
                 if let Some((repo_path, name, path)) = new_worktree {
                     create_worktree(&repo_path, &name, &path)?;
@@ -163,8 +157,7 @@ impl App {
                 Ok(refresh_repo_path.map(|p| fetch_worktrees(&p).unwrap_or_default()))
             },
             move |result| Action::SessionCreationFinished { session, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_session_creation_finished(
@@ -174,7 +167,6 @@ impl App {
     ) -> Result<()> {
         apply_session_creation(&mut self.projects, &mut self.sessions, session, result)?;
         self.persist_state();
-        self.broadcast_state()?;
         Ok(())
     }
 
@@ -194,8 +186,8 @@ impl App {
         });
         let session = session.clone();
 
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(PendingTarget::Session(session.id), Activity::Updating),
             move || {
                 if let Some((from, to)) = rename {
                     rename_tmux_session(from, to)?;
@@ -203,8 +195,7 @@ impl App {
                 Ok(())
             },
             move |result| Action::SessionUpdateFinished { session, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_session_update_finished(
@@ -214,7 +205,6 @@ impl App {
     ) -> Result<()> {
         apply_session_update(&mut self.sessions, session, result)?;
         self.persist_state();
-        self.broadcast_state()?;
         Ok(())
     }
 
@@ -229,12 +219,11 @@ impl App {
         let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
         let session = session.clone();
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(PendingTarget::Session(session.id), Activity::Removing),
             move || kill_tmux_session(tmux_session_name),
             move |result| Action::SessionRemovalFinished { session, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_session_removal_finished(
@@ -244,7 +233,6 @@ impl App {
     ) -> Result<()> {
         apply_session_removal(&mut self.projects, &mut self.sessions, session, result)?;
         self.persist_state();
-        self.broadcast_state()?;
         Ok(())
     }
 
@@ -256,15 +244,20 @@ impl App {
         let project_id = project.id;
         let repo_path = project.path.clone();
         let wt_path = worktree.path.clone();
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(
+                PendingTarget::Worktree {
+                    project_id,
+                    path: wt_path.clone(),
+                },
+                Activity::Removing,
+            ),
             move || {
                 remove_worktree(&repo_path, &wt_path)?;
                 fetch_worktrees(&repo_path)
             },
             move |result| Action::WorktreeRemovalFinished { project_id, result },
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn on_worktree_removal_finished(
@@ -273,12 +266,11 @@ impl App {
         result: &Result<Vec<Worktree>, String>,
     ) -> Result<()> {
         apply_worktree_removal(&mut self.projects, project_id, result)?;
-        self.broadcast_state()?;
         Ok(())
     }
 
     /// Reconciles the app's in-memory session state with what tmux actually has running.
-    pub(super) fn start_tmux_sync(&self) {
+    pub(super) fn start_tmux_sync(&mut self) -> Result<()> {
         // Only sessions known now may be pruned; ones created meanwhile are newer than the fetch
         let known_session_ids: HashSet<Uuid> = self.sessions.keys().copied().collect();
         let repo_paths: Vec<(Uuid, String)> = self
@@ -288,8 +280,8 @@ impl App {
             .map(|p| (p.id, p.path.clone()))
             .collect();
 
-        spawn_job(
-            self.action_tx.clone(),
+        self.spawn_tracked_job(
+            Pending::new(PendingTarget::App, Activity::Syncing),
             move || {
                 let active_session_names = fetch_tmux_sessions()?;
                 let worktrees = repo_paths
@@ -302,7 +294,7 @@ impl App {
                 known_session_ids,
                 result,
             },
-        );
+        )
     }
 
     pub(super) fn on_tmux_sync_finished(
@@ -316,7 +308,6 @@ impl App {
             known_session_ids,
             result,
         )?;
-        self.broadcast_state()?;
         Ok(())
     }
 }

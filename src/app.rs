@@ -12,6 +12,7 @@ use crate::{
     action::Action,
     components::{Component, fps::FpsCounter, home::Home, notification::Notification},
     config::Config,
+    pending::{JobId, Pending},
     project::Project,
     session::Session,
     state::{AppState, load_state, save_state},
@@ -34,6 +35,8 @@ pub struct App {
     action_rx: mpsc::UnboundedReceiver<Action>,
     projects: HashMap<Uuid, Project>,
     sessions: HashMap<Uuid, Session>,
+    pending: HashMap<JobId, Pending>,
+    next_job_id: JobId,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -62,6 +65,8 @@ impl App {
             action_rx,
             projects: HashMap::default(),
             sessions: HashMap::default(),
+            pending: HashMap::default(),
+            next_job_id: JobId::default(),
         })
     }
 
@@ -84,7 +89,7 @@ impl App {
 
         self.load_persisted_state();
         self.broadcast_state()?;
-        self.start_tmux_sync();
+        self.start_tmux_sync()?;
 
         let action_tx = self.action_tx.clone();
         loop {
@@ -202,18 +207,6 @@ impl App {
                 Action::SubmitProject(ref project) => self.on_submit_project(project),
                 Action::UpdateProject(ref project) => self.on_update_project(project),
                 Action::RemoveProject(ref project) => self.on_remove_project(project),
-                Action::ProjectCreationFinished {
-                    ref project,
-                    ref result,
-                } => self.on_project_creation_finished(project, result),
-                Action::ProjectUpdateFinished {
-                    ref project,
-                    ref result,
-                } => self.on_project_update_finished(project, result),
-                Action::ProjectRemovalFinished {
-                    project_id,
-                    ref result,
-                } => self.on_project_removal_finished(project_id, result),
                 Action::SubmitSession(ref session) => self.on_submit_session(session),
                 Action::UpdateSession(ref session) => self.on_update_session(session),
                 Action::AttachSession(ref session) => {
@@ -227,29 +220,16 @@ impl App {
                     result
                 }
                 Action::RemoveSession(ref session) => self.on_remove_session(session),
-                Action::SessionCreationFinished {
-                    ref session,
-                    ref result,
-                } => self.on_session_creation_finished(session, result),
-                Action::SessionUpdateFinished {
-                    ref session,
-                    ref result,
-                } => self.on_session_update_finished(session, result),
-                Action::SessionRemovalFinished {
-                    ref session,
-                    ref result,
-                } => self.on_session_removal_finished(session, result),
                 Action::RemoveWorktree(ref project, ref worktree) => {
                     self.on_remove_worktree(project, worktree)
                 }
-                Action::WorktreeRemovalFinished {
-                    project_id,
-                    ref result,
-                } => self.on_worktree_removal_finished(project_id, result),
-                Action::TmuxSyncFinished {
-                    ref known_session_ids,
-                    ref result,
-                } => self.on_tmux_sync_finished(known_session_ids, result),
+                Action::JobFinished(id, ref completion) => {
+                    self.pending.remove(&id);
+                    // Handled in place, so the job's outcome and its end are broadcast together
+                    let outcome = self.handle_job_completion(completion);
+                    self.broadcast_state()?;
+                    outcome
+                }
                 _ => Ok(()),
             };
             if let Err(e) = outcome {
@@ -262,6 +242,44 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn handle_job_completion(&mut self, action: &Action) -> color_eyre::Result<()> {
+        match *action {
+            Action::ProjectCreationFinished {
+                ref project,
+                ref result,
+            } => self.on_project_creation_finished(project, result),
+            Action::ProjectUpdateFinished {
+                ref project,
+                ref result,
+            } => self.on_project_update_finished(project, result),
+            Action::ProjectRemovalFinished {
+                project_id,
+                ref result,
+            } => self.on_project_removal_finished(project_id, result),
+            Action::SessionCreationFinished {
+                ref session,
+                ref result,
+            } => self.on_session_creation_finished(session, result),
+            Action::SessionUpdateFinished {
+                ref session,
+                ref result,
+            } => self.on_session_update_finished(session, result),
+            Action::SessionRemovalFinished {
+                ref session,
+                ref result,
+            } => self.on_session_removal_finished(session, result),
+            Action::WorktreeRemovalFinished {
+                project_id,
+                ref result,
+            } => self.on_worktree_removal_finished(project_id, result),
+            Action::TmuxSyncFinished {
+                ref known_session_ids,
+                ref result,
+            } => self.on_tmux_sync_finished(known_session_ids, result),
+            _ => Err(eyre!("Unexpected job completion: {action}")),
+        }
     }
 
     fn handle_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {
@@ -298,6 +316,7 @@ impl App {
         self.action_tx.send(Action::StateUpdated(
             self.projects.clone(),
             self.sessions.clone(),
+            self.pending.values().cloned().collect(),
         ))?;
         Ok(())
     }
