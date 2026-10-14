@@ -4,7 +4,12 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 use uuid::Uuid;
 
-use crate::{project::Project, session::Session, worktree::Worktree};
+use crate::{
+    pending::{JobId, Pending},
+    project::Project,
+    session::Session,
+    worktree::Worktree,
+};
 
 /// Active tmux session names, and refreshed worktrees per project
 pub type TmuxSnapshot = (Vec<String>, HashMap<Uuid, Vec<Worktree>>);
@@ -77,10 +82,13 @@ pub enum Action {
         project_id: Uuid,
         result: Result<Vec<Worktree>, String>,
     },
+    // Jobs
+    /// Wraps a background job's completion action, so it is handled together with ending the job
+    JobFinished(JobId, Box<Action>),
     // State
     TmuxSyncFinished {
         known_session_ids: HashSet<Uuid>,
         result: Result<TmuxSnapshot, String>,
     },
-    StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>),
+    StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>, Vec<Pending>),
 }

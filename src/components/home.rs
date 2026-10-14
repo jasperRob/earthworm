@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    time::Instant,
+};
 
 use super::Component;
 use crate::{
@@ -12,6 +15,7 @@ use crate::{
         remove_session::RemoveSessionPopup, remove_worktree::RemoveWorktreePopup,
     },
     config::key_event_to_string,
+    pending::{Activity, PendingTarget, apply_placeholders},
     project::Project,
     session::Session,
     theme::SECONDARY,
@@ -27,6 +31,9 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_FRAME_MS: u128 = 80;
+
 enum ListEntry {
     Project(Project),
     ProjectSession(Project, Session),
@@ -34,7 +41,19 @@ enum ListEntry {
     Session(Session),
 }
 
-#[derive(Default)]
+impl ListEntry {
+    fn target(&self) -> PendingTarget {
+        match self {
+            ListEntry::Project(p) => PendingTarget::Project(p.id),
+            ListEntry::ProjectSession(_, s) | ListEntry::Session(s) => PendingTarget::Session(s.id),
+            ListEntry::AvailableWorktree(p, wt) => PendingTarget::Worktree {
+                project_id: p.id,
+                path: wt.path.clone(),
+            },
+        }
+    }
+}
+
 pub struct Home {
     keymaps: Vec<(String, String)>,
     list_entries: Vec<ListEntry>,
@@ -47,6 +66,8 @@ pub struct Home {
     projects: HashMap<Uuid, Project>,
     session_history: VecDeque<Session>,
     session_history_index: usize,
+    pending: HashMap<PendingTarget, Activity>,
+    spinner_start: Instant,
 }
 
 impl Home {
@@ -63,7 +84,32 @@ impl Home {
             projects: HashMap::default(),
             session_history: VecDeque::new(),
             session_history_index: usize::default(),
+            pending: HashMap::default(),
+            spinner_start: Instant::now(),
         }
+    }
+
+    /// The activity running on an entry, or on the project it belongs to
+    fn row_activity(&self, entry: &ListEntry) -> Option<Activity> {
+        let parent = match entry {
+            ListEntry::ProjectSession(p, _) | ListEntry::AvailableWorktree(p, _) => {
+                self.pending.get(&PendingTarget::Project(p.id))
+            }
+            ListEntry::Project(_) | ListEntry::Session(_) => None,
+        };
+        self.pending.get(&entry.target()).or(parent).copied()
+    }
+
+    fn selected_is_pending(&self) -> bool {
+        self.list_state
+            .selected()
+            .and_then(|i| self.list_entries.get(i))
+            .is_some_and(|entry| self.row_activity(entry).is_some())
+    }
+
+    fn spinner(&self) -> char {
+        let frame = self.spinner_start.elapsed().as_millis() / SPINNER_FRAME_MS;
+        SPINNER_FRAMES[frame as usize % SPINNER_FRAMES.len()]
     }
 
     fn rebuild_list(&mut self, projects: HashMap<Uuid, Project>, sessions: HashMap<Uuid, Session>) {
@@ -218,7 +264,12 @@ impl Component for Home {
             Action::Help => {
                 self.popup_state = PopupState::Open(Box::new(HelpPopup::new(self.keymaps.clone())))
             }
-            Action::StateUpdated(projects, sessions) => {
+            Action::StateUpdated(mut projects, mut sessions, pending) => {
+                apply_placeholders(&mut projects, &mut sessions, &pending);
+                self.pending = pending
+                    .into_iter()
+                    .map(|p| (p.target, p.activity))
+                    .collect();
                 self.projects = projects.clone();
                 self.rebuild_list(projects, sessions);
             }
@@ -250,7 +301,7 @@ impl Component for Home {
             Action::CmdAddProject => {
                 self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
             }
-            Action::CmdAddSessionInProject => {
+            Action::CmdAddSessionInProject if !self.selected_is_pending() => {
                 if let Some(selected) = self.list_state.selected() {
                     match self.list_entries.get(selected) {
                         Some(ListEntry::Project(p)) => {
@@ -265,7 +316,7 @@ impl Component for Home {
                     }
                 }
             }
-            Action::CmdAddSession => {
+            Action::CmdAddSession if !self.selected_is_pending() => {
                 if let Some(selected) = self.list_state.selected() {
                     match self.list_entries.get(selected) {
                         Some(ListEntry::AvailableWorktree(p, wt)) => {
@@ -276,7 +327,7 @@ impl Component for Home {
                     }
                 }
             }
-            Action::CmdEdit => {
+            Action::CmdEdit if !self.selected_is_pending() => {
                 if let Some(i) = self.list_state.selected()
                     && let Some(entry) = self.list_entries.get(i)
                 {
@@ -297,7 +348,7 @@ impl Component for Home {
                     }
                 }
             }
-            Action::CmdDeleteItem => {
+            Action::CmdDeleteItem if !self.selected_is_pending() => {
                 if let Some(i) = self.list_state.selected()
                     && let Some(entry) = self.list_entries.get(i)
                 {
@@ -325,7 +376,7 @@ impl Component for Home {
             Action::CancelInput => {
                 self.popup_state = PopupState::Closed;
             }
-            Action::CmdAttach => {
+            Action::CmdAttach if !self.selected_is_pending() => {
                 let mut session: Option<Session> = None;
                 if let Some(i) = self.list_state.selected()
                     && let Some(entry) = self.list_entries.get(i)
@@ -364,7 +415,12 @@ impl Component for Home {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let title_bar = Paragraph::new(" earthworm").block(Block::default()).style(
+        let spinner = self.spinner();
+        let title = match self.pending.get(&PendingTarget::App) {
+            Some(activity) => format!(" earthworm  {spinner} {activity}"),
+            None => " earthworm".to_string(),
+        };
+        let title_bar = Paragraph::new(title).block(Block::default()).style(
             Style::default()
                 .fg(SECONDARY)
                 .add_modifier(Modifier::REVERSED),
@@ -373,20 +429,26 @@ impl Component for Home {
         let items: Vec<ListItem> = self
             .list_entries
             .iter()
-            .map(|entry| match entry {
-                ListEntry::Project(p) => ListItem::new(Line::from(Span::styled(
-                    format!(" - {}", p.name.clone()),
-                    Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
-                ))),
-                ListEntry::ProjectSession(_, s) => {
-                    ListItem::new(Line::from(Span::raw(format!("     {}", s.name.clone(),))))
+            .map(|entry| {
+                let line = match entry {
+                    ListEntry::Project(p) => Line::from(Span::styled(
+                        format!(" - {}", p.name.clone()),
+                        Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
+                    )),
+                    ListEntry::ProjectSession(_, s) => {
+                        Line::from(Span::raw(format!("     {}", s.name.clone(),)))
+                    }
+                    ListEntry::AvailableWorktree(_, worktree) => Line::from(format!(
+                        "     [worktree] ({}) {}",
+                        worktree.name.clone(),
+                        worktree.path.clone()
+                    )),
+                    ListEntry::Session(s) => Line::from(format!(" {}", s.name.clone())),
+                };
+                match self.row_activity(entry) {
+                    Some(activity) => ListItem::new(with_activity(line, spinner, activity)),
+                    None => ListItem::new(line),
                 }
-                ListEntry::AvailableWorktree(_, worktree) => ListItem::new(Line::from(format!(
-                    "     [worktree] ({}) {}",
-                    worktree.name.clone(),
-                    worktree.path.clone()
-                ))),
-                ListEntry::Session(s) => ListItem::new(Line::from(format!(" {}", s.name.clone()))),
             })
             .collect();
 
@@ -447,5 +509,164 @@ impl Component for Home {
                 .collect();
         }
         Ok(())
+    }
+}
+
+/// Dims a row and marks it with the activity running on it
+fn with_activity(line: Line<'_>, spinner: char, activity: Activity) -> Line<'_> {
+    let mut line = line.patch_style(Modifier::DIM);
+    line.push_span(Span::raw(format!("  {spinner} {activity}")));
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use super::{Home, ListEntry};
+    use crate::{
+        action::Action,
+        components::{Component, popups::PopupState},
+        pending::{Activity, Pending, PendingTarget},
+        project::Project,
+        session::Session,
+    };
+
+    fn project() -> Project {
+        Project {
+            id: Uuid::new_v4(),
+            name: "project".to_string(),
+            path: String::new(),
+            sessions: Vec::new(),
+            worktrees: Vec::new(),
+        }
+    }
+
+    fn session(project_id: Option<Uuid>) -> Session {
+        Session {
+            id: Uuid::new_v4(),
+            project_id,
+            name: "session".to_string(),
+            path: None,
+            worktree: None,
+        }
+    }
+
+    fn home(projects: Vec<Project>, sessions: Vec<Session>, pending: Vec<Pending>) -> Home {
+        let mut home = Home::new();
+        home.update(Action::StateUpdated(
+            projects.into_iter().map(|p| (p.id, p)).collect(),
+            sessions.into_iter().map(|s| (s.id, s)).collect(),
+            pending,
+        ))
+        .unwrap();
+        home
+    }
+
+    fn select_session(home: &mut Home, session_id: Uuid) {
+        let index = home.list_entries.iter().position(|e| {
+            matches!(e, ListEntry::ProjectSession(_, s) | ListEntry::Session(s) if s.id == session_id)
+        });
+        home.list_state.select(index);
+    }
+
+    #[test]
+    fn test_placeholder_session_is_listed_under_its_project() {
+        let project = project();
+        let session = session(Some(project.id));
+        let home = home(
+            vec![project.clone()],
+            Vec::new(),
+            vec![Pending::creating_session(&session)],
+        );
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(p), ListEntry::ProjectSession(_, s)]
+                if p.id == project.id && s.id == session.id
+        ));
+        assert_eq!(
+            home.row_activity(&home.list_entries[1]),
+            Some(Activity::Creating)
+        );
+    }
+
+    #[test]
+    fn test_delete_opens_popup_on_idle_row() {
+        let session = session(None);
+        let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
+        select_session(&mut home, session.id);
+        home.update(Action::CmdDeleteItem).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Open(_)));
+    }
+
+    #[test]
+    fn test_delete_and_edit_are_blocked_on_pending_row() {
+        let session = session(None);
+        let mut home = home(
+            Vec::new(),
+            vec![session.clone()],
+            vec![Pending::new(
+                PendingTarget::Session(session.id),
+                Activity::Removing,
+            )],
+        );
+        select_session(&mut home, session.id);
+        home.update(Action::CmdDeleteItem).unwrap();
+        home.update(Action::CmdEdit).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Closed));
+    }
+
+    #[test]
+    fn test_attach_is_blocked_on_session_being_created() {
+        let session = session(None);
+        let mut home = home(
+            Vec::new(),
+            Vec::new(),
+            vec![Pending::creating_session(&session)],
+        );
+        select_session(&mut home, session.id);
+        assert_eq!(home.update(Action::CmdAttach).unwrap(), None);
+    }
+
+    #[test]
+    fn test_project_sessions_inherit_project_activity() {
+        let mut project = project();
+        let session = session(Some(project.id));
+        project.sessions.push(session.id);
+        let mut home = home(
+            vec![project.clone()],
+            vec![session.clone()],
+            vec![Pending::new(
+                PendingTarget::Project(project.id),
+                Activity::Removing,
+            )],
+        );
+        select_session(&mut home, session.id);
+        assert!(home.selected_is_pending());
+        home.update(Action::CmdDeleteItem).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Closed));
+    }
+
+    #[test]
+    fn test_finished_job_unblocks_row() {
+        let session = session(None);
+        let mut home = home(
+            Vec::new(),
+            vec![session.clone()],
+            vec![Pending::new(
+                PendingTarget::Session(session.id),
+                Activity::Updating,
+            )],
+        );
+        home.update(Action::StateUpdated(
+            HashMap::new(),
+            HashMap::from([(session.id, session.clone())]),
+            Vec::new(),
+        ))
+        .unwrap();
+        select_session(&mut home, session.id);
+        assert!(!home.selected_is_pending());
     }
 }
