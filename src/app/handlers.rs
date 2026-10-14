@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::App;
 
 use crate::{
-    action::{Action, TmuxSnapshot},
+    action::{Action, JobCompletion, TmuxSnapshot},
     git::{create_worktree, fetch_worktrees, remove_worktree},
     pending::{Activity, JobId, Pending, PendingTarget},
     project::Project,
@@ -28,7 +28,7 @@ impl App {
         self.spawn_tracked_job(
             Pending::creating_project(&project),
             move || Ok(refresh_worktrees(&repo_path, &error_tx)),
-            move |result| Action::ProjectCreationFinished { project, result },
+            move |result| JobCompletion::ProjectCreation { project, result },
         )
     }
 
@@ -71,7 +71,7 @@ impl App {
                 rename_tmux_sessions(renames)?;
                 Ok(refresh_worktrees(&repo_path, &error_tx))
             },
-            move |result| Action::ProjectUpdateFinished { project, result },
+            move |result| JobCompletion::ProjectUpdate { project, result },
         )
     }
 
@@ -113,7 +113,7 @@ impl App {
                 }
                 Ok(())
             },
-            move |result| Action::ProjectRemovalFinished { project_id, result },
+            move |result| JobCompletion::ProjectRemoval { project_id, result },
         )
     }
 
@@ -125,7 +125,7 @@ impl App {
         // The project is removed even if some of its sessions failed to terminate
         apply_project_removal(&mut self.projects, &mut self.sessions, project_id);
         self.persist_state();
-        result.as_ref().map_err(|e| eyre!("{e}"))?;
+        job_result(result)?;
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl App {
                 new_tmux_session(tmux_session_name, tmux_session_path)?;
                 Ok(refresh_repo_path.and_then(|p| refresh_worktrees(&p, &error_tx)))
             },
-            move |result| Action::SessionCreationFinished { session, result },
+            move |result| JobCompletion::SessionCreation { session, result },
         )
     }
 
@@ -199,7 +199,7 @@ impl App {
                 }
                 Ok(())
             },
-            move |result| Action::SessionUpdateFinished { session, result },
+            move |result| JobCompletion::SessionUpdate { session, result },
         )
     }
 
@@ -227,7 +227,7 @@ impl App {
         self.spawn_tracked_job(
             Pending::new(PendingTarget::Session(session.id), Activity::Removing),
             move || kill_tmux_session(tmux_session_name),
-            move |result| Action::SessionRemovalFinished { session, result },
+            move |result| JobCompletion::SessionRemoval { session, result },
         )
     }
 
@@ -261,7 +261,7 @@ impl App {
                 remove_worktree(&repo_path, &wt_path)?;
                 fetch_worktrees(&repo_path)
             },
-            move |result| Action::WorktreeRemovalFinished { project_id, result },
+            move |result| JobCompletion::WorktreeRemoval { project_id, result },
         )
     }
 
@@ -307,7 +307,7 @@ impl App {
                     .collect();
                 Ok((active_session_names, worktrees))
             },
-            move |result| Action::TmuxSyncFinished {
+            move |result| JobCompletion::TmuxSync {
                 known_session_ids,
                 result,
             },
@@ -354,6 +354,11 @@ fn refresh_worktrees(repo_path: &str, error_tx: &UnboundedSender<Action>) -> Opt
         .ok()
 }
 
+/// A finished job's result, with its error message converted into a propagatable error
+fn job_result<T>(result: &Result<T, String>) -> Result<&T> {
+    result.as_ref().map_err(|e| eyre!("{e}"))
+}
+
 fn rename_tmux_sessions(renames: Vec<(String, String)>) -> Result<()> {
     let mut successful: Vec<(String, String)> = Vec::new();
 
@@ -376,7 +381,7 @@ fn apply_project_change(
     project: &Project,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     let mut project = project.clone();
     if let Some(worktrees) = worktrees {
         project.worktrees = worktrees.clone();
@@ -390,7 +395,7 @@ fn apply_project_update(
     project: &Project,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
+    job_result(result)?;
     let Some(existing) = projects.get(&project.id) else {
         return Err(eyre!("Project no longer exists"));
     };
@@ -416,7 +421,7 @@ fn apply_session_update(
     session: &Session,
     result: &Result<(), String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
+    job_result(result)?;
     if !sessions.contains_key(&session.id) {
         return Err(eyre!("Session no longer exists"));
     }
@@ -430,7 +435,7 @@ fn apply_session_removal(
     session: &Session,
     result: &Result<(), String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
+    job_result(result)?;
     sessions.remove(&session.id);
     if let Some(project_id) = session.project_id
         && let Some(project) = projects.get_mut(&project_id)
@@ -446,7 +451,7 @@ fn apply_tmux_sync(
     known_session_ids: &HashSet<Uuid>,
     result: &Result<TmuxSnapshot, String>,
 ) -> Result<()> {
-    let (active_session_names, worktrees) = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let (active_session_names, worktrees) = job_result(result)?;
     let active_session_names: HashSet<&str> =
         active_session_names.iter().map(String::as_str).collect();
 
@@ -516,7 +521,7 @@ fn apply_session_creation(
     session: &Session,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     // The project may have been removed while the session was being created
     let project = match session.project_id {
         None => None,
@@ -543,7 +548,7 @@ fn apply_worktree_removal(
     project_id: Uuid,
     result: &Result<Vec<Worktree>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     if let Some(project) = projects.get_mut(&project_id) {
         project.worktrees = worktrees.clone();
     }
