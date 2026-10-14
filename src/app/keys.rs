@@ -33,7 +33,12 @@ impl KeySequence {
             .keys()
             .any(|k| k.starts_with(&self.keys) && k.len() > self.keys.len());
         if !is_prefix {
+            let broke_sequence = self.keys.len() > 1;
             self.keys.clear();
+            // Retry the key on its own, as it may start a new sequence
+            if broke_sequence {
+                return self.feed(key, keymap);
+            }
         }
         None
     }
@@ -136,6 +141,17 @@ mod tests {
         let actions = feed_all(&mut sequence, "<Space><j>", &default_keymap());
         assert_eq!(actions, vec![None, Some(Action::CmdSelectNext)]);
         assert!(sequence.keys.is_empty());
+    }
+
+    #[test]
+    fn test_key_breaking_a_sequence_starts_a_new_one() {
+        let mut sequence = KeySequence::default();
+        let keymap = default_keymap();
+        let actions = feed_all(&mut sequence, "<Space><g><g>", &keymap);
+        assert_eq!(actions, vec![None, None, Some(Action::CmdJumpTop)]);
+
+        let actions = feed_all(&mut sequence, "<g><Space><p>", &keymap);
+        assert_eq!(actions, vec![None, None, Some(Action::CmdAddProject)]);
     }
 
     #[test]
