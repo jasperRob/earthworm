@@ -370,9 +370,6 @@ impl Component for Home {
                     }
                 }
             }
-            Action::CancelInput => {
-                self.popup_state = PopupState::Closed;
-            }
             Action::CmdAttach if !self.selected_is_pending() => {
                 let mut session: Option<Session> = None;
                 if let Some(i) = self.list_state.selected()
