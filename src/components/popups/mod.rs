@@ -1,18 +1,15 @@
-pub mod edit_project;
-pub mod edit_session;
 pub mod help;
-pub mod new_project;
-pub mod new_session;
-pub mod new_session_from_worktree;
-pub mod new_session_in_project;
-pub mod remove_project;
-pub mod remove_session;
-pub mod remove_worktree;
+pub mod project;
+pub mod session;
+pub mod worktree;
 
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
-use crate::action::Action;
+use crate::{
+    action::Action,
+    components::form::{Form, FormEvent},
+};
 
 #[derive(Default)]
 pub enum PopupState {
@@ -32,6 +29,35 @@ pub trait Popup {
     fn draw(&mut self, frame: &mut Frame, area: Rect);
 }
 
+/// A popup around a form, which submits the action built from the form's values
+pub struct FormPopup {
+    form: Form,
+    on_submit: Box<dyn Fn(&Form) -> Action>,
+}
+
+impl FormPopup {
+    pub fn new(form: Form, on_submit: impl Fn(&Form) -> Action + 'static) -> Self {
+        Self {
+            form,
+            on_submit: Box::new(on_submit),
+        }
+    }
+}
+
+impl Popup for FormPopup {
+    fn handle_key(&mut self, key: KeyEvent) -> PopupOutcome {
+        match self.form.handle_key(key) {
+            FormEvent::Submit => PopupOutcome::Submitted((self.on_submit)(&self.form)),
+            FormEvent::Cancel => PopupOutcome::Cancelled,
+            FormEvent::Continue => PopupOutcome::Pending,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.form.draw(frame, area);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -39,11 +65,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        edit_project::EditProjectPopup, edit_session::EditSessionPopup,
-        new_project::NewProjectPopup, new_session::NewSessionPopup,
-        new_session_from_worktree::NewSessionFromWorktreePopup,
-        new_session_in_project::NewSessionInProjectPopup, remove_project::RemoveProjectPopup,
-        remove_session::RemoveSessionPopup, remove_worktree::RemoveWorktreePopup, *,
+        project::{edit_project, new_project, remove_project},
+        session::{
+            edit_session, new_session, new_session_from_worktree, new_session_in_project,
+            remove_session,
+        },
+        worktree::remove_worktree,
+        *,
     };
     use crate::{project::Project, session::Session, worktree::Worktree};
 
@@ -105,7 +133,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_project_submits_project() {
         let (_dir, path) = temp_dir();
-        let mut popup = NewProjectPopup::new();
+        let mut popup = new_project();
         type_text(&mut popup, "repo");
         press(&mut popup, KeyCode::Tab);
         type_text(&mut popup, &path);
@@ -126,14 +154,14 @@ mod tests {
 
     #[test]
     fn test_new_project_cancels() {
-        assert_cancels(NewProjectPopup::new(), KeyCode::Esc);
+        assert_cancels(new_project(), KeyCode::Esc);
     }
 
     #[test]
     fn test_edit_project_submits_updated_project() {
         let (_dir, path) = temp_dir();
         let project = project(&path);
-        let mut popup = EditProjectPopup::new(project.clone());
+        let mut popup = edit_project(project.clone());
         type_text(&mut popup, "2");
         assert_eq!(
             submit(&mut popup, KeyCode::Enter),
@@ -146,13 +174,13 @@ mod tests {
 
     #[test]
     fn test_edit_project_cancels() {
-        assert_cancels(EditProjectPopup::new(project("/src/repo")), KeyCode::Esc);
+        assert_cancels(edit_project(project("/src/repo")), KeyCode::Esc);
     }
 
     #[tokio::test]
     async fn test_new_session_submits_session() {
         let (_dir, path) = temp_dir();
-        let mut popup = NewSessionPopup::new();
+        let mut popup = new_session();
         type_text(&mut popup, "fix");
         press(&mut popup, KeyCode::Tab);
         type_text(&mut popup, &path);
@@ -173,13 +201,13 @@ mod tests {
 
     #[test]
     fn test_new_session_cancels() {
-        assert_cancels(NewSessionPopup::new(), KeyCode::Esc);
+        assert_cancels(new_session(), KeyCode::Esc);
     }
 
     #[test]
     fn test_new_session_in_project_submits_worktree_session() {
         let project = project("/src/repo");
-        let mut popup = NewSessionInProjectPopup::new(&project);
+        let mut popup = new_session_in_project(&project);
         type_text(&mut popup, "fix");
         let Action::SubmitSession(session) = submit(&mut popup, KeyCode::Enter) else {
             panic!("expected SubmitSession");
@@ -201,17 +229,14 @@ mod tests {
 
     #[test]
     fn test_new_session_in_project_cancels() {
-        assert_cancels(
-            NewSessionInProjectPopup::new(&project("/src/repo")),
-            KeyCode::Esc,
-        );
+        assert_cancels(new_session_in_project(&project("/src/repo")), KeyCode::Esc);
     }
 
     #[test]
     fn test_new_session_from_worktree_submits_session_on_worktree() {
         let project = project("/src/repo");
         let worktree = worktree();
-        let mut popup = NewSessionFromWorktreePopup::new(&project, &worktree);
+        let mut popup = new_session_from_worktree(&project, &worktree);
         type_text(&mut popup, "2");
         let Action::SubmitSession(session) = submit(&mut popup, KeyCode::Enter) else {
             panic!("expected SubmitSession");
@@ -231,7 +256,7 @@ mod tests {
     #[test]
     fn test_new_session_from_worktree_cancels() {
         assert_cancels(
-            NewSessionFromWorktreePopup::new(&project("/src/repo"), &worktree()),
+            new_session_from_worktree(&project("/src/repo"), &worktree()),
             KeyCode::Esc,
         );
     }
@@ -239,7 +264,7 @@ mod tests {
     #[test]
     fn test_edit_session_submits_updated_session() {
         let session = session();
-        let mut popup = EditSessionPopup::new(session.clone());
+        let mut popup = edit_session(session.clone());
         type_text(&mut popup, "2");
         assert_eq!(
             submit(&mut popup, KeyCode::Enter),
@@ -252,13 +277,13 @@ mod tests {
 
     #[test]
     fn test_edit_session_cancels() {
-        assert_cancels(EditSessionPopup::new(session()), KeyCode::Esc);
+        assert_cancels(edit_session(session()), KeyCode::Esc);
     }
 
     #[test]
     fn test_remove_project_submits_project() {
         let project = project("/src/repo");
-        let mut popup = RemoveProjectPopup::new(project.clone());
+        let mut popup = remove_project(project.clone());
         assert_eq!(
             submit(&mut popup, KeyCode::Char('y')),
             Action::RemoveProject(project)
@@ -267,17 +292,14 @@ mod tests {
 
     #[test]
     fn test_remove_project_cancels() {
-        assert_cancels(RemoveProjectPopup::new(project("/src/repo")), KeyCode::Esc);
-        assert_cancels(
-            RemoveProjectPopup::new(project("/src/repo")),
-            KeyCode::Char('n'),
-        );
+        assert_cancels(remove_project(project("/src/repo")), KeyCode::Esc);
+        assert_cancels(remove_project(project("/src/repo")), KeyCode::Char('n'));
     }
 
     #[test]
     fn test_remove_session_submits_session() {
         let session = session();
-        let mut popup = RemoveSessionPopup::new(session.clone());
+        let mut popup = remove_session(session.clone());
         assert_eq!(
             submit(&mut popup, KeyCode::Char('y')),
             Action::RemoveSession(session)
@@ -286,15 +308,15 @@ mod tests {
 
     #[test]
     fn test_remove_session_cancels() {
-        assert_cancels(RemoveSessionPopup::new(session()), KeyCode::Esc);
-        assert_cancels(RemoveSessionPopup::new(session()), KeyCode::Char('n'));
+        assert_cancels(remove_session(session()), KeyCode::Esc);
+        assert_cancels(remove_session(session()), KeyCode::Char('n'));
     }
 
     #[test]
     fn test_remove_worktree_submits_project_and_worktree() {
         let project = project("/src/repo");
         let worktree = worktree();
-        let mut popup = RemoveWorktreePopup::new(worktree.clone(), project.clone());
+        let mut popup = remove_worktree(worktree.clone(), project.clone());
         assert_eq!(
             submit(&mut popup, KeyCode::Char('y')),
             Action::RemoveWorktree(project, worktree)
@@ -304,11 +326,11 @@ mod tests {
     #[test]
     fn test_remove_worktree_cancels() {
         assert_cancels(
-            RemoveWorktreePopup::new(worktree(), project("/src/repo")),
+            remove_worktree(worktree(), project("/src/repo")),
             KeyCode::Esc,
         );
         assert_cancels(
-            RemoveWorktreePopup::new(worktree(), project("/src/repo")),
+            remove_worktree(worktree(), project("/src/repo")),
             KeyCode::Char('n'),
         );
     }
