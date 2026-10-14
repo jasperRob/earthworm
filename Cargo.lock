@@ -799,7 +799,6 @@ dependencies = [
  "json5",
  "lazy_static",
  "libc",
- "log",
  "pretty_assertions",
  "ratatui",
  "serde",
@@ -813,7 +812,6 @@ dependencies = [
  "tracing",
  "tracing-error",
  "tracing-subscriber",
- "tui-input",
  "uuid",
  "vergen-gix",
 ]
@@ -3559,17 +3557,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "tui-input"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd014a652e31cf25ea68d11b10a7b09549863449b19387505c9933f11eb05fa"
-dependencies = [
- "ratatui",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]
