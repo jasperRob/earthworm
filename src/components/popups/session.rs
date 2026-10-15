@@ -159,7 +159,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from(project_path),
-            sessions: vec![],
             worktrees: vec![],
         };
         let mut popup = new_session_in_project(&project);
@@ -215,7 +214,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from("/src/repo"),
-            sessions: vec![],
             worktrees: vec![],
         };
         let mut popup = new_session_in_project(&project);

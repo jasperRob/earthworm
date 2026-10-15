@@ -10,7 +10,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
-    action::Action,
+    action::{Action, JobCompletion},
     components::{Component, fps::FpsCounter, home::Home, notification::Notification},
     config::Config,
     pending::{JobId, Pending},
@@ -235,41 +235,44 @@ impl App {
         Ok(())
     }
 
-    fn handle_job_completion(&mut self, id: JobId, action: &Action) -> color_eyre::Result<()> {
-        match *action {
-            Action::ProjectCreationFinished {
+    fn handle_job_completion(
+        &mut self,
+        id: JobId,
+        completion: &JobCompletion,
+    ) -> color_eyre::Result<()> {
+        match *completion {
+            JobCompletion::ProjectCreation {
                 ref project,
                 ref result,
             } => self.on_project_creation_finished(project, result),
-            Action::ProjectUpdateFinished {
+            JobCompletion::ProjectUpdate {
                 ref project,
                 ref result,
             } => self.on_project_update_finished(project, result),
-            Action::ProjectRemovalFinished {
+            JobCompletion::ProjectRemoval {
                 project_id,
                 ref result,
             } => self.on_project_removal_finished(project_id, result),
-            Action::SessionCreationFinished {
+            JobCompletion::SessionCreation {
                 ref session,
                 ref result,
             } => self.on_session_creation_finished(session, result),
-            Action::SessionUpdateFinished {
+            JobCompletion::SessionUpdate {
                 ref session,
                 ref result,
             } => self.on_session_update_finished(session, result),
-            Action::SessionRemovalFinished {
+            JobCompletion::SessionRemoval {
                 ref session,
                 ref result,
             } => self.on_session_removal_finished(session, result),
-            Action::WorktreeRemovalFinished {
+            JobCompletion::WorktreeRemoval {
                 project_id,
                 ref result,
             } => self.on_worktree_removal_finished(project_id, result),
-            Action::TmuxSyncFinished {
+            JobCompletion::TmuxSync {
                 ref known_session_ids,
                 ref result,
             } => self.on_tmux_sync_finished(id, known_session_ids, result),
-            _ => Err(eyre!("Unexpected job completion: {action}")),
         }
     }
 

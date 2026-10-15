@@ -45,48 +45,53 @@ pub enum Action {
     SubmitProject(Project),
     UpdateProject(Project),
     RemoveProject(Project),
-    ProjectCreationFinished {
-        project: Project,
-        result: Result<Option<Vec<Worktree>>, String>,
-    },
-    ProjectUpdateFinished {
-        project: Project,
-        result: Result<Option<Vec<Worktree>>, String>,
-    },
-    ProjectRemovalFinished {
-        project_id: Uuid,
-        result: Result<(), String>,
-    },
     // Session
     SubmitSession(Session),
     UpdateSession(Session),
     AttachSession(Session),
     RemoveSession(Session),
-    SessionCreationFinished {
+    // Worktrees
+    RemoveWorktree(Project, Worktree),
+    // Jobs
+    /// A background job's completion, handled together with ending the job
+    JobFinished(JobId, JobCompletion),
+    // State
+    StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>, Vec<Pending>),
+}
+
+/// Outcome of a background job, carrying what is needed to apply its result
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobCompletion {
+    ProjectCreation {
+        project: Project,
+        result: Result<Option<Vec<Worktree>>, String>,
+    },
+    ProjectUpdate {
+        project: Project,
+        result: Result<Option<Vec<Worktree>>, String>,
+    },
+    ProjectRemoval {
+        project_id: Uuid,
+        result: Result<(), String>,
+    },
+    SessionCreation {
         session: Session,
         result: Result<Option<Vec<Worktree>>, String>,
     },
-    SessionUpdateFinished {
+    SessionUpdate {
         session: Session,
         result: Result<(), String>,
     },
-    SessionRemovalFinished {
+    SessionRemoval {
         session: Session,
         result: Result<(), String>,
     },
-    // Worktrees
-    RemoveWorktree(Project, Worktree),
-    WorktreeRemovalFinished {
+    WorktreeRemoval {
         project_id: Uuid,
         result: Result<Vec<Worktree>, String>,
     },
-    // Jobs
-    /// Wraps a background job's completion action, so it is handled together with ending the job
-    JobFinished(JobId, Box<Action>),
-    // State
-    TmuxSyncFinished {
+    TmuxSync {
         known_session_ids: HashSet<Uuid>,
         result: Result<TmuxSnapshot, String>,
     },
-    StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>, Vec<Pending>),
 }

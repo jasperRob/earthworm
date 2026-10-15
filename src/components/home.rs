@@ -110,11 +110,13 @@ impl Home {
             ListEntry::ProjectSession(p, _) | ListEntry::AvailableWorktree(p, _) => {
                 self.pending.get(&PendingTarget::Project(p.id))
             }
-            // Pending session placeholders are already in their project's sessions
-            ListEntry::Project(p) => p.sessions.iter().find_map(|id| {
-                self.pending
-                    .get(&PendingTarget::Session(*id))
-                    .filter(|activity| **activity == Activity::Creating)
+            // Pending session placeholders are already listed under their project
+            ListEntry::Project(p) => self.list_entries.iter().find_map(|e| match e {
+                ListEntry::ProjectSession(sp, s) if sp.id == p.id => self
+                    .pending
+                    .get(&PendingTarget::Session(s.id))
+                    .filter(|activity| **activity == Activity::Creating),
+                _ => None,
             }),
             ListEntry::Session(_) => None,
         };
@@ -141,10 +143,13 @@ impl Home {
 
         for project in sorted_projects {
             list_entries.push(ListEntry::Project(project.clone()));
-            for session_id in &project.sessions {
-                if let Some(session) = sessions.get(session_id) {
-                    list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
-                }
+            let mut project_sessions: Vec<&Session> = sessions
+                .values()
+                .filter(|s| s.project_id == Some(project.id))
+                .collect();
+            project_sessions.sort_by(|a, b| a.name.cmp(&b.name));
+            for session in project_sessions {
+                list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
             }
             // Find all paths which are currently used by sessions
             let active_paths: HashSet<&str> = sessions
@@ -575,7 +580,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: "project".to_string(),
             path: String::new(),
-            sessions: Vec::new(),
             worktrees: Vec::new(),
         }
     }
@@ -629,6 +633,39 @@ mod tests {
     }
 
     #[test]
+    fn test_project_sessions_are_listed_under_it_sorted_by_name() {
+        let project = project();
+        let mut b = session(Some(project.id));
+        b.name = "b".to_string();
+        let mut a = session(Some(project.id));
+        a.name = "a".to_string();
+        let home = home(
+            vec![project.clone()],
+            vec![b.clone(), a.clone()],
+            Vec::new(),
+        );
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [
+                ListEntry::Project(p),
+                ListEntry::ProjectSession(_, first),
+                ListEntry::ProjectSession(_, second),
+            ] if p.id == project.id && first.id == a.id && second.id == b.id
+        ));
+    }
+
+    #[test]
+    fn test_session_of_missing_project_is_not_listed() {
+        let project = project();
+        let session = session(Some(Uuid::new_v4()));
+        let home = home(vec![project.clone()], vec![session], Vec::new());
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(p)] if p.id == project.id
+        ));
+    }
+
+    #[test]
     fn test_delete_opens_popup_on_idle_row() {
         let session = session(None);
         let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
@@ -668,9 +705,8 @@ mod tests {
 
     #[test]
     fn test_project_sessions_inherit_project_activity() {
-        let mut project = project();
+        let project = project();
         let session = session(Some(project.id));
-        project.sessions.push(session.id);
         let mut home = home(
             vec![project.clone()],
             vec![session.clone()],
@@ -918,7 +954,6 @@ mod tests {
             path: Some(used.path.clone()),
             ..session(Some(project.id))
         };
-        project.sessions.push(session.id);
         let home = home(vec![project], vec![session.clone()], Vec::new());
         assert!(matches!(
             home.list_entries.as_slice(),

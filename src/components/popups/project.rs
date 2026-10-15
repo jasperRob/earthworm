@@ -41,7 +41,6 @@ pub fn new_project() -> FormPopup {
                 id: Uuid::new_v4(),
                 name: form.value(Field::Name as usize),
                 path: form.value(Field::Path as usize),
-                sessions: vec![],
                 // TODO: should init based on existing worktrees for git repo
                 worktrees: vec![],
             })

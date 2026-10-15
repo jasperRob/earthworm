@@ -107,7 +107,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from(path),
-            sessions: vec![],
             worktrees: vec![],
         }
     }
@@ -146,7 +145,6 @@ mod tests {
                 id: project.id,
                 name: String::from("repo"),
                 path,
-                sessions: vec![],
                 worktrees: vec![],
             }
         );

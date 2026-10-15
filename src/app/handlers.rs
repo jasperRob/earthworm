@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::App;
 
 use crate::{
-    action::{Action, TmuxSnapshot},
+    action::{Action, JobCompletion, TmuxSnapshot},
     git::{create_worktree, fetch_worktrees, remove_worktree},
     pending::{Activity, JobId, Pending, PendingTarget},
     project::Project,
@@ -28,7 +28,7 @@ impl App {
         self.spawn_tracked_job(
             Pending::creating_project(&project),
             move || Ok(refresh_worktrees(&repo_path, &error_tx)),
-            move |result| Action::ProjectCreationFinished { project, result },
+            move |result| JobCompletion::ProjectCreation { project, result },
         )
     }
 
@@ -71,7 +71,7 @@ impl App {
                 rename_tmux_sessions(renames)?;
                 Ok(refresh_worktrees(&repo_path, &error_tx))
             },
-            move |result| Action::ProjectUpdateFinished { project, result },
+            move |result| JobCompletion::ProjectUpdate { project, result },
         )
     }
 
@@ -113,7 +113,7 @@ impl App {
                 }
                 Ok(())
             },
-            move |result| Action::ProjectRemovalFinished { project_id, result },
+            move |result| JobCompletion::ProjectRemoval { project_id, result },
         )
     }
 
@@ -125,7 +125,7 @@ impl App {
         // The project is removed even if some of its sessions failed to terminate
         apply_project_removal(&mut self.projects, &mut self.sessions, project_id);
         self.persist_state();
-        result.as_ref().map_err(|e| eyre!("{e}"))?;
+        job_result(result)?;
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl App {
                 new_tmux_session(tmux_session_name, tmux_session_path)?;
                 Ok(refresh_repo_path.and_then(|p| refresh_worktrees(&p, &error_tx)))
             },
-            move |result| Action::SessionCreationFinished { session, result },
+            move |result| JobCompletion::SessionCreation { session, result },
         )
     }
 
@@ -199,7 +199,7 @@ impl App {
                 }
                 Ok(())
             },
-            move |result| Action::SessionUpdateFinished { session, result },
+            move |result| JobCompletion::SessionUpdate { session, result },
         )
     }
 
@@ -227,7 +227,7 @@ impl App {
         self.spawn_tracked_job(
             Pending::new(PendingTarget::Session(session.id), Activity::Removing),
             move || kill_tmux_session(tmux_session_name),
-            move |result| Action::SessionRemovalFinished { session, result },
+            move |result| JobCompletion::SessionRemoval { session, result },
         )
     }
 
@@ -236,7 +236,7 @@ impl App {
         session: &Session,
         result: &Result<(), String>,
     ) -> Result<()> {
-        apply_session_removal(&mut self.projects, &mut self.sessions, session, result)?;
+        apply_session_removal(&mut self.sessions, session, result)?;
         self.persist_state();
         Ok(())
     }
@@ -261,7 +261,7 @@ impl App {
                 remove_worktree(&repo_path, &wt_path)?;
                 fetch_worktrees(&repo_path)
             },
-            move |result| Action::WorktreeRemovalFinished { project_id, result },
+            move |result| JobCompletion::WorktreeRemoval { project_id, result },
         )
     }
 
@@ -307,7 +307,7 @@ impl App {
                     .collect();
                 Ok((active_session_names, worktrees))
             },
-            move |result| Action::TmuxSyncFinished {
+            move |result| JobCompletion::TmuxSync {
                 known_session_ids,
                 result,
             },
@@ -354,6 +354,11 @@ fn refresh_worktrees(repo_path: &str, error_tx: &UnboundedSender<Action>) -> Opt
         .ok()
 }
 
+/// A finished job's result, with its error message converted into a propagatable error
+fn job_result<T>(result: &Result<T, String>) -> Result<&T> {
+    result.as_ref().map_err(|e| eyre!("{e}"))
+}
+
 fn rename_tmux_sessions(renames: Vec<(String, String)>) -> Result<()> {
     let mut successful: Vec<(String, String)> = Vec::new();
 
@@ -376,7 +381,7 @@ fn apply_project_change(
     project: &Project,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     let mut project = project.clone();
     if let Some(worktrees) = worktrees {
         project.worktrees = worktrees.clone();
@@ -390,16 +395,13 @@ fn apply_project_update(
     project: &Project,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
-    let Some(existing) = projects.get(&project.id) else {
+    job_result(result)?;
+    if !projects.contains_key(&project.id) {
         return Err(eyre!("Project no longer exists"));
-    };
+    }
     // TODO: For now, we will just replace in state. In future, maybe think
     // about how this can be done with specific field updates. Could be safer.
-    // Sessions may have been created while the update was running, so keep the current ones.
-    let mut project = project.clone();
-    project.sessions = existing.sessions.clone();
-    apply_project_change(projects, &project, result)
+    apply_project_change(projects, project, result)
 }
 
 fn apply_project_removal(
@@ -416,7 +418,7 @@ fn apply_session_update(
     session: &Session,
     result: &Result<(), String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
+    job_result(result)?;
     if !sessions.contains_key(&session.id) {
         return Err(eyre!("Session no longer exists"));
     }
@@ -425,18 +427,12 @@ fn apply_session_update(
 }
 
 fn apply_session_removal(
-    projects: &mut HashMap<Uuid, Project>,
     sessions: &mut HashMap<Uuid, Session>,
     session: &Session,
     result: &Result<(), String>,
 ) -> Result<()> {
-    result.as_ref().map_err(|e| eyre!("{e}"))?;
+    job_result(result)?;
     sessions.remove(&session.id);
-    if let Some(project_id) = session.project_id
-        && let Some(project) = projects.get_mut(&project_id)
-    {
-        project.sessions.retain(|id| *id != session.id);
-    }
     Ok(())
 }
 
@@ -446,7 +442,7 @@ fn apply_tmux_sync(
     known_session_ids: &HashSet<Uuid>,
     result: &Result<TmuxSnapshot, String>,
 ) -> Result<()> {
-    let (active_session_names, worktrees) = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let (active_session_names, worktrees) = job_result(result)?;
     let active_session_names: HashSet<&str> =
         active_session_names.iter().map(String::as_str).collect();
 
@@ -477,9 +473,6 @@ fn apply_tmux_sync(
         .map(|s| s.id)
         .collect();
     sessions.retain(|id, _| !dead_session_ids.contains(id));
-    for project in projects.values_mut() {
-        project.sessions.retain(|id| !dead_session_ids.contains(id));
-    }
 
     // Capture unmapped tmux sessions
     for name in active_session_names {
@@ -516,7 +509,7 @@ fn apply_session_creation(
     session: &Session,
     result: &Result<Option<Vec<Worktree>>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     // The project may have been removed while the session was being created
     let project = match session.project_id {
         None => None,
@@ -529,11 +522,10 @@ fn apply_session_creation(
         })?),
     };
     sessions.insert(session.id, session.clone());
-    if let Some(project) = project {
-        project.sessions.push(session.id);
-        if let Some(worktrees) = worktrees {
-            project.worktrees = worktrees.clone();
-        }
+    if let Some(project) = project
+        && let Some(worktrees) = worktrees
+    {
+        project.worktrees = worktrees.clone();
     }
     Ok(())
 }
@@ -543,7 +535,7 @@ fn apply_worktree_removal(
     project_id: Uuid,
     result: &Result<Vec<Worktree>, String>,
 ) -> Result<()> {
-    let worktrees = result.as_ref().map_err(|e| eyre!("{e}"))?;
+    let worktrees = job_result(result)?;
     if let Some(project) = projects.get_mut(&project_id) {
         project.worktrees = worktrees.clone();
     }
@@ -567,7 +559,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("project"),
             path: String::from("/repo"),
-            sessions: vec![],
             worktrees: vec![worktree("old")],
         }
     }
@@ -631,7 +622,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sessions.get(&s.id), Some(&s));
-        assert_eq!(projects[&id].sessions, vec![s.id]);
         assert_eq!(projects[&id].worktrees, vec![worktree("new")]);
     }
 
@@ -699,18 +689,14 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_project_update_keeps_current_sessions() {
-        let mut p = project();
+    fn test_apply_project_update_replaces_project() {
+        let p = project();
         let id = p.id;
-        let session_id = Uuid::new_v4();
-        p.sessions = vec![session_id];
         let mut projects = HashMap::from([(id, p.clone())]);
         let mut updated = p;
         updated.name = String::from("renamed");
-        updated.sessions = vec![];
         apply_project_update(&mut projects, &updated, &Ok(None)).unwrap();
         assert_eq!(projects[&id].name, "renamed");
-        assert_eq!(projects[&id].sessions, vec![session_id]);
     }
 
     #[test]
@@ -765,25 +751,18 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_session_removal_ok_removes_from_state_and_project() {
-        let mut p = project();
-        let id = p.id;
-        let s = session(Some(id));
-        p.sessions = vec![s.id];
-        let mut projects = HashMap::from([(id, p)]);
+    fn test_apply_session_removal_ok_removes_from_state() {
+        let s = session(Some(Uuid::new_v4()));
         let mut sessions = HashMap::from([(s.id, s.clone())]);
-        apply_session_removal(&mut projects, &mut sessions, &s, &Ok(())).unwrap();
+        apply_session_removal(&mut sessions, &s, &Ok(())).unwrap();
         assert!(sessions.is_empty());
-        assert!(projects[&id].sessions.is_empty());
     }
 
     #[test]
     fn test_apply_session_removal_err_changes_nothing() {
         let s = session(None);
-        let mut projects = HashMap::new();
         let mut sessions = HashMap::from([(s.id, s.clone())]);
-        let err = apply_session_removal(&mut projects, &mut sessions, &s, &Err("boom".into()))
-            .unwrap_err();
+        let err = apply_session_removal(&mut sessions, &s, &Err("boom".into())).unwrap_err();
         assert_eq!(err.to_string(), "boom");
         assert_eq!(sessions[&s.id], s);
     }
@@ -854,13 +833,12 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_tmux_sync_removes_pruned_session_from_its_project() {
-        let mut p = project();
+    fn test_apply_tmux_sync_prunes_dead_project_session_and_keeps_live_one() {
+        let p = project();
         let id = p.id;
         let dead = session(Some(id));
         let mut live = session(Some(id));
         live.name = String::from("live");
-        p.sessions = vec![dead.id, live.id];
         let mut projects = HashMap::from([(id, p)]);
         let mut sessions = HashMap::from([(dead.id, dead.clone()), (live.id, live.clone())]);
         let known = HashSet::from([dead.id, live.id]);
@@ -871,8 +849,7 @@ mod tests {
             &Ok((vec![String::from("project_live")], HashMap::new())),
         )
         .unwrap();
-        assert_eq!(sessions, HashMap::from([(live.id, live.clone())]));
-        assert_eq!(projects[&id].sessions, vec![live.id]);
+        assert_eq!(sessions, HashMap::from([(live.id, live)]));
     }
 
     #[test]

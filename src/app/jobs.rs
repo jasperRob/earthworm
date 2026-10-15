@@ -1,10 +1,13 @@
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::App;
-use crate::{action::Action, pending::Pending};
+use crate::{
+    action::{Action, JobCompletion},
+    pending::Pending,
+};
 
 impl App {
-    /// Spawns a job and reports it as pending until its completion action has been handled
+    /// Spawns a job and reports it as pending until its completion has been handled
     pub(super) fn spawn_tracked_job<T, Work, Complete>(
         &mut self,
         pending: Pending,
@@ -14,13 +17,13 @@ impl App {
     where
         T: Send + 'static,
         Work: FnOnce() -> color_eyre::Result<T> + Send + 'static,
-        Complete: FnOnce(Result<T, String>) -> Action + Send + 'static,
+        Complete: FnOnce(Result<T, String>) -> JobCompletion + Send + 'static,
     {
         let id = self.next_job_id;
         self.next_job_id += 1;
         self.pending.insert(id, pending);
         spawn_job(self.action_tx.clone(), work, move |result| {
-            Action::JobFinished(id, Box::new(complete(result)))
+            Action::JobFinished(id, complete(result))
         });
         self.broadcast_state()
     }
