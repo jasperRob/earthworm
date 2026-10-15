@@ -72,25 +72,19 @@ pub fn apply_placeholders(
     sessions: &mut HashMap<Uuid, Session>,
     pending: &[Pending],
 ) {
-    // Projects first, so a session placeholder can always find its project
     for pending in pending {
-        if let Some(Placeholder::Project(project)) = &pending.placeholder {
-            projects
-                .entry(project.id)
-                .or_insert_with(|| project.clone());
-        }
-    }
-    for pending in pending {
-        if let Some(Placeholder::Session(session)) = &pending.placeholder {
-            sessions
-                .entry(session.id)
-                .or_insert_with(|| session.clone());
-            if let Some(project_id) = session.project_id
-                && let Some(project) = projects.get_mut(&project_id)
-                && !project.sessions.contains(&session.id)
-            {
-                project.sessions.push(session.id);
+        match &pending.placeholder {
+            Some(Placeholder::Project(project)) => {
+                projects
+                    .entry(project.id)
+                    .or_insert_with(|| project.clone());
             }
+            Some(Placeholder::Session(session)) => {
+                sessions
+                    .entry(session.id)
+                    .or_insert_with(|| session.clone());
+            }
+            None => {}
         }
     }
 }
@@ -109,7 +103,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: "project".to_string(),
             path: String::new(),
-            sessions: Vec::new(),
             worktrees: Vec::new(),
         }
     }
@@ -138,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_placeholders_adds_pending_session_to_its_project() {
+    fn test_apply_placeholders_adds_pending_session() {
         let project = project();
         let session = session(Some(project.id));
         let mut projects = HashMap::from([(project.id, project.clone())]);
@@ -149,31 +142,13 @@ mod tests {
             &[Pending::creating_session(&session)],
         );
         assert_eq!(sessions.get(&session.id), Some(&session));
-        assert_eq!(projects[&project.id].sessions, vec![session.id]);
-    }
-
-    #[test]
-    fn test_apply_placeholders_adds_session_to_pending_project_in_any_order() {
-        let project = project();
-        let session = session(Some(project.id));
-        let mut projects = HashMap::new();
-        let mut sessions = HashMap::new();
-        apply_placeholders(
-            &mut projects,
-            &mut sessions,
-            &[
-                Pending::creating_session(&session),
-                Pending::creating_project(&project),
-            ],
-        );
-        assert_eq!(projects[&project.id].sessions, vec![session.id]);
+        assert_eq!(projects[&project.id], project);
     }
 
     #[test]
     fn test_apply_placeholders_keeps_existing_entries() {
-        let mut project = project();
+        let project = project();
         let session = session(Some(project.id));
-        project.sessions.push(session.id);
         let mut placeholder = session.clone();
         placeholder.name = "placeholder".to_string();
         let mut projects = HashMap::from([(project.id, project.clone())]);
@@ -184,7 +159,6 @@ mod tests {
             &[Pending::creating_session(&placeholder)],
         );
         assert_eq!(sessions[&session.id], session);
-        assert_eq!(projects[&project.id].sessions, vec![session.id]);
     }
 
     #[test]

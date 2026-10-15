@@ -8,11 +8,14 @@ use crate::{
     action::Action,
     app::Mode,
     components::popups::{
-        PopupOutcome, PopupState, edit_project::EditProjectPopup, edit_session::EditSessionPopup,
-        help::HelpPopup, new_project::NewProjectPopup, new_session::NewSessionPopup,
-        new_session_from_worktree::NewSessionFromWorktreePopup,
-        new_session_in_project::NewSessionInProjectPopup, remove_project::RemoveProjectPopup,
-        remove_session::RemoveSessionPopup, remove_worktree::RemoveWorktreePopup,
+        PopupOutcome, PopupState,
+        help::HelpPopup,
+        project::{edit_project, new_project, remove_project},
+        session::{
+            edit_session, new_session, new_session_from_worktree, new_session_in_project,
+            remove_session,
+        },
+        worktree::remove_worktree,
     },
     config::key_event_to_string,
     pending::{Activity, PendingTarget, apply_placeholders},
@@ -100,15 +103,24 @@ impl Home {
         }
     }
 
-    /// The activity running on an entry, or on the project it belongs to
+    /// The activity running on an entry, on the project it belongs to, or, for a project, on
+    /// creating one of its sessions
     fn row_activity(&self, entry: &ListEntry) -> Option<Activity> {
-        let parent = match entry {
+        let related = match entry {
             ListEntry::ProjectSession(p, _) | ListEntry::AvailableWorktree(p, _) => {
                 self.pending.get(&PendingTarget::Project(p.id))
             }
-            ListEntry::Project(_) | ListEntry::Session(_) => None,
+            // Pending session placeholders are already listed under their project
+            ListEntry::Project(p) => self.list_entries.iter().find_map(|e| match e {
+                ListEntry::ProjectSession(sp, s) if sp.id == p.id => self
+                    .pending
+                    .get(&PendingTarget::Session(s.id))
+                    .filter(|activity| **activity == Activity::Creating),
+                _ => None,
+            }),
+            ListEntry::Session(_) => None,
         };
-        self.pending.get(&entry.target()).or(parent).copied()
+        self.pending.get(&entry.target()).or(related).copied()
     }
 
     fn selected_is_pending(&self) -> bool {
@@ -131,10 +143,13 @@ impl Home {
 
         for project in sorted_projects {
             list_entries.push(ListEntry::Project(project.clone()));
-            for session_id in &project.sessions {
-                if let Some(session) = sessions.get(session_id) {
-                    list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
-                }
+            let mut project_sessions: Vec<&Session> = sessions
+                .values()
+                .filter(|s| s.project_id == Some(project.id))
+                .collect();
+            project_sessions.sort_by(|a, b| a.name.cmp(&b.name));
+            for session in project_sessions {
+                list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
             }
             // Find all paths which are currently used by sessions
             let active_paths: HashSet<&str> = sessions
@@ -328,19 +343,17 @@ impl Component for Home {
                 self.list_state
                     .select(Some(self.search_matches[self.search_cursor]));
             }
-            Action::CmdAddProject => {
-                self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
-            }
+            Action::CmdAddProject => self.popup_state = PopupState::Open(Box::new(new_project())),
             Action::CmdAddSessionInProject if !self.selected_is_pending() => {
                 if let Some(selected) = self.list_state.selected() {
                     match self.list_entries.get(selected) {
                         Some(ListEntry::Project(p)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
+                                PopupState::Open(Box::new(new_session_in_project(p)));
                         }
                         Some(ListEntry::ProjectSession(p, _)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
+                                PopupState::Open(Box::new(new_session_in_project(p)));
                         }
                         _ => {}
                     }
@@ -355,9 +368,9 @@ impl Component for Home {
                 match selected {
                     Some(ListEntry::AvailableWorktree(p, wt)) => {
                         self.popup_state =
-                            PopupState::Open(Box::new(NewSessionFromWorktreePopup::new(p, wt)))
+                            PopupState::Open(Box::new(new_session_from_worktree(p, wt)))
                     }
-                    _ => self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new())),
+                    _ => self.popup_state = PopupState::Open(Box::new(new_session())),
                 }
             }
             Action::CmdEdit if !self.selected_is_pending() => {
@@ -366,17 +379,14 @@ impl Component for Home {
                 {
                     match entry {
                         ListEntry::Project(p) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditProjectPopup::new(p.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_project(p.clone())))
                         }
                         ListEntry::ProjectSession(_, s) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_session(s.clone())))
                         }
                         ListEntry::AvailableWorktree(_, _) => {}
                         ListEntry::Session(s) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_session(s.clone())))
                         }
                     }
                 }
@@ -388,26 +398,22 @@ impl Component for Home {
                     match entry {
                         ListEntry::Project(p) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveProjectPopup::new(p.clone())));
+                                PopupState::Open(Box::new(remove_project(p.clone())));
                         }
                         ListEntry::ProjectSession(_, s) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                                PopupState::Open(Box::new(remove_session(s.clone())));
                         }
                         ListEntry::Session(s) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                                PopupState::Open(Box::new(remove_session(s.clone())));
                         }
                         ListEntry::AvailableWorktree(p, wt) => {
-                            self.popup_state = PopupState::Open(Box::new(
-                                RemoveWorktreePopup::new(wt.clone(), p.clone()),
-                            ));
+                            self.popup_state =
+                                PopupState::Open(Box::new(remove_worktree(wt.clone(), p.clone())));
                         }
                     }
                 }
-            }
-            Action::CancelInput => {
-                self.popup_state = PopupState::Closed;
             }
             Action::CmdAttach if !self.selected_is_pending() => {
                 let mut session: Option<Session> = None;
@@ -574,7 +580,6 @@ mod tests {
             id: Uuid::new_v4(),
             name: "project".to_string(),
             path: String::new(),
-            sessions: Vec::new(),
             worktrees: Vec::new(),
         }
     }
@@ -628,6 +633,39 @@ mod tests {
     }
 
     #[test]
+    fn test_project_sessions_are_listed_under_it_sorted_by_name() {
+        let project = project();
+        let mut b = session(Some(project.id));
+        b.name = "b".to_string();
+        let mut a = session(Some(project.id));
+        a.name = "a".to_string();
+        let home = home(
+            vec![project.clone()],
+            vec![b.clone(), a.clone()],
+            Vec::new(),
+        );
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [
+                ListEntry::Project(p),
+                ListEntry::ProjectSession(_, first),
+                ListEntry::ProjectSession(_, second),
+            ] if p.id == project.id && first.id == a.id && second.id == b.id
+        ));
+    }
+
+    #[test]
+    fn test_session_of_missing_project_is_not_listed() {
+        let project = project();
+        let session = session(Some(Uuid::new_v4()));
+        let home = home(vec![project.clone()], vec![session], Vec::new());
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(p)] if p.id == project.id
+        ));
+    }
+
+    #[test]
     fn test_delete_opens_popup_on_idle_row() {
         let session = session(None);
         let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
@@ -667,9 +705,8 @@ mod tests {
 
     #[test]
     fn test_project_sessions_inherit_project_activity() {
-        let mut project = project();
+        let project = project();
         let session = session(Some(project.id));
-        project.sessions.push(session.id);
         let mut home = home(
             vec![project.clone()],
             vec![session.clone()],
@@ -680,6 +717,24 @@ mod tests {
         );
         select_session(&mut home, session.id);
         assert!(home.selected_is_pending());
+        home.update(Action::CmdDeleteItem).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Closed));
+    }
+
+    #[test]
+    fn test_project_is_busy_while_creating_one_of_its_sessions() {
+        let project = project();
+        let session = session(Some(project.id));
+        let mut home = home(
+            vec![project.clone()],
+            Vec::new(),
+            vec![Pending::creating_session(&session)],
+        );
+        assert_eq!(
+            home.row_activity(&home.list_entries[0]),
+            Some(Activity::Creating)
+        );
+        home.list_state.select(Some(0));
         home.update(Action::CmdDeleteItem).unwrap();
         assert!(matches!(home.popup_state, PopupState::Closed));
     }
@@ -899,7 +954,6 @@ mod tests {
             path: Some(used.path.clone()),
             ..session(Some(project.id))
         };
-        project.sessions.push(session.id);
         let home = home(vec![project], vec![session.clone()], Vec::new());
         assert!(matches!(
             home.list_entries.as_slice(),
