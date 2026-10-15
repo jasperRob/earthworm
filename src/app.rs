@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
+use keys::KeySequence;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -21,6 +22,7 @@ use crate::{
 
 mod handlers;
 mod jobs;
+mod keys;
 
 pub struct App {
     config: Config,
@@ -30,7 +32,7 @@ pub struct App {
     should_quit: bool,
     should_suspend: bool,
     mode: Mode,
-    last_tick_key_events: Vec<KeyEvent>,
+    key_sequence: KeySequence,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
     projects: HashMap<Uuid, Project>,
@@ -61,7 +63,7 @@ impl App {
             should_suspend: false,
             config: Config::new()?,
             mode: Mode::Home,
-            last_tick_key_events: Vec::new(),
+            key_sequence: KeySequence::default(),
             action_tx,
             action_rx,
             projects: HashMap::default(),
@@ -138,36 +140,12 @@ impl App {
         if capturing {
             return Ok(());
         }
-        let action_tx = self.action_tx.clone();
         let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
             return Ok(());
         };
-        match keymap.get(&vec![key]) {
-            Some(action) => {
-                info!("Got action: {action:?}");
-                action_tx.send(action.clone())?;
-                self.last_tick_key_events.drain(..);
-            }
-            _ => {
-                // If the key was not handled as a single key action,
-                // then consider it for multi-key combinations.
-                self.last_tick_key_events.push(key);
-
-                // Check for multi-key combinations
-                if let Some(action) = keymap.get(&self.last_tick_key_events) {
-                    info!("Got action: {action:?}");
-                    action_tx.send(action.clone())?;
-                    self.last_tick_key_events.drain(..);
-                } else {
-                    let is_prefix = keymap.keys().any(|k| {
-                        k.starts_with(&self.last_tick_key_events)
-                            && k.len() > self.last_tick_key_events.len()
-                    });
-                    if !is_prefix {
-                        self.last_tick_key_events.drain(..);
-                    }
-                }
-            }
+        if let Some(action) = self.key_sequence.feed(key, keymap) {
+            info!("Got action: {action:?}");
+            self.action_tx.send(action)?;
         }
         Ok(())
     }
@@ -179,7 +157,7 @@ impl App {
             }
             let outcome = match action {
                 Action::Tick => {
-                    // self.last_tick_key_events.drain(..);
+                    // self.key_sequence = KeySequence::default();
                     Ok(())
                 }
                 Action::Quit => {
