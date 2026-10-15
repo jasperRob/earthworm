@@ -32,7 +32,6 @@ pub struct FormInput {
     pub label: String,
     pub initial_value: String,
     input_validations: Vec<InputValidation>,
-    pub dependant_on: Option<(usize, bool)>,
     pub readonly: bool,
 }
 
@@ -42,7 +41,6 @@ impl FormInput {
             label: String::default(),
             initial_value: String::default(),
             input_validations: Vec::default(),
-            dependant_on: None,
             readonly: false,
         }
     }

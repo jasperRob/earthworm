@@ -39,7 +39,6 @@ pub struct FormInputState {
     pub value: String,
     pub cursor_position: usize,
     pub is_valid: bool,
-    pub hidden: bool,
     pub suggested_path: Option<String>,
     /// Id of the latest suggestion requested for this input; older results are discarded
     pub suggestion_request: u64,
@@ -106,7 +105,6 @@ impl Form {
                 value: form_input.initial_value.clone(),
                 cursor_position: form_input.initial_value.chars().count(), // no non-ascii support
                 is_valid: false,
-                hidden: false,
                 suggested_path: None,
                 suggestion_request: 0,
             })
@@ -147,10 +145,7 @@ impl Form {
             KeyCode::Tab | KeyCode::Down => {
                 let n = self.form_input_states.len();
                 let mut next = self.focused + 1;
-                while next < n
-                    && (self.form_input_states[next].hidden
-                        || self.form_input_states[next].form_input.readonly)
-                {
+                while next < n && self.form_input_states[next].form_input.readonly {
                     next += 1;
                 }
                 if next < n {
@@ -162,9 +157,7 @@ impl Form {
                 let mut prev = self.focused;
                 while prev > 0 {
                     prev -= 1;
-                    if !(self.form_input_states[prev].hidden
-                        || self.form_input_states[prev].form_input.readonly)
-                    {
+                    if !self.form_input_states[prev].form_input.readonly {
                         self.focused = prev;
                         break;
                     }
@@ -255,13 +248,7 @@ impl Form {
     }
 
     fn draw_standard_form(&self, frame: &mut Frame, area: Rect) {
-        let non_hidden_input_states: Vec<&FormInputState> = self
-            .form_input_states
-            .iter()
-            .filter(|state| !state.hidden)
-            .collect();
-
-        let height = (2 * non_hidden_input_states.len() - 1) as u16 + 4;
+        let height = (2 * self.form_input_states.len() - 1) as u16 + 4;
         let popup = area.centered(Constraint::Percentage(40), Constraint::Length(height));
         // clears out any background in the area before rendering the popup
         self.draw_form_frame(frame, popup);
@@ -271,7 +258,7 @@ impl Form {
         });
 
         let mut constraints: Vec<Constraint> = vec![Constraint::Fill(1)];
-        for _ in 0..non_hidden_input_states.len() {
+        for _ in 0..self.form_input_states.len() {
             constraints.push(Constraint::Length(1));
             constraints.push(Constraint::Length(1));
         }
@@ -283,15 +270,10 @@ impl Form {
         let mut active_area = Rect::default();
         let mut active_label = String::default();
 
-        let visible = self
-            .form_input_states
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !s.hidden);
-        for (slot, (real_idx, state)) in visible.enumerate() {
-            let is_focused = self.focused == real_idx;
+        for (index, state) in self.form_input_states.iter().enumerate() {
+            let is_focused = self.focused == index;
             let widget = self.labeled_input(state, is_focused);
-            let area = areas[(slot * 2) + 1];
+            let area = areas[(index * 2) + 1];
             frame.render_widget(widget, area);
             if is_focused {
                 active_area = area;
@@ -363,28 +345,10 @@ impl Form {
         self.form_input_states.iter_mut().for_each(|input_state| {
             input_state.is_valid = input_state.form_input.is_valid(&input_state.value)
         });
-        let valid: Vec<bool> = self.form_input_states.iter().map(|s| s.is_valid).collect();
-        let values: Vec<String> = self
-            .form_input_states
-            .iter()
-            .map(|s| s.value.clone())
-            .collect();
-        self.form_input_states.iter_mut().for_each(|input_state| {
-            if let Some(dependant_on) = input_state.form_input.dependant_on
-                && let Some(&is_valid) = valid.get(dependant_on.0)
-                && is_valid
-                && let Some(value) = values.get(dependant_on.0)
-            {
-                input_state.hidden =
-                    !(value == "true" && dependant_on.1 || value == "false" && !dependant_on.1);
-            }
-        });
     }
 
     fn first_invalid_input(&self) -> Option<usize> {
-        self.form_input_states
-            .iter()
-            .position(|s| !s.hidden && !s.is_valid)
+        self.form_input_states.iter().position(|s| !s.is_valid)
     }
 
     // TODO: These should take a form input state as a param. The use of self should be separated
@@ -880,19 +844,6 @@ mod tests {
         assert_eq!(form.focused, 0);
         assert!(matches!(press_enter(&mut form), FormEvent::Continue));
         assert_eq!(form.focused, 1);
-    }
-
-    #[test]
-    fn test_enter_ignores_hidden_invalid_input() {
-        let mut hidden = FormInput::new().required();
-        hidden.dependant_on = Some((0, true));
-        let mut form: Form = Form::standard().inputs(vec![
-            FormInput::new()
-                .initial_value(String::from("false"))
-                .required(),
-            hidden,
-        ]);
-        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
     }
 
     #[test]
