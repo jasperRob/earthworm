@@ -100,15 +100,22 @@ impl Home {
         }
     }
 
-    /// The activity running on an entry, or on the project it belongs to
+    /// The activity running on an entry, on the project it belongs to, or, for a project, on
+    /// creating one of its sessions
     fn row_activity(&self, entry: &ListEntry) -> Option<Activity> {
-        let parent = match entry {
+        let related = match entry {
             ListEntry::ProjectSession(p, _) | ListEntry::AvailableWorktree(p, _) => {
                 self.pending.get(&PendingTarget::Project(p.id))
             }
-            ListEntry::Project(_) | ListEntry::Session(_) => None,
+            // Pending session placeholders are already in their project's sessions
+            ListEntry::Project(p) => p.sessions.iter().find_map(|id| {
+                self.pending
+                    .get(&PendingTarget::Session(*id))
+                    .filter(|activity| **activity == Activity::Creating)
+            }),
+            ListEntry::Session(_) => None,
         };
-        self.pending.get(&entry.target()).or(parent).copied()
+        self.pending.get(&entry.target()).or(related).copied()
     }
 
     fn selected_is_pending(&self) -> bool {
@@ -680,6 +687,24 @@ mod tests {
         );
         select_session(&mut home, session.id);
         assert!(home.selected_is_pending());
+        home.update(Action::CmdDeleteItem).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Closed));
+    }
+
+    #[test]
+    fn test_project_is_busy_while_creating_one_of_its_sessions() {
+        let project = project();
+        let session = session(Some(project.id));
+        let mut home = home(
+            vec![project.clone()],
+            Vec::new(),
+            vec![Pending::creating_session(&session)],
+        );
+        assert_eq!(
+            home.row_activity(&home.list_entries[0]),
+            Some(Activity::Creating)
+        );
+        home.list_state.select(Some(0));
         home.update(Action::CmdDeleteItem).unwrap();
         assert!(matches!(home.popup_state, PopupState::Closed));
     }

@@ -11,8 +11,8 @@ use crate::{
     worktree::Worktree,
 };
 
-/// Active tmux session names, and refreshed worktrees per project
-pub type TmuxSnapshot = (Vec<String>, HashMap<Uuid, Vec<Worktree>>);
+/// Active tmux session names, and refreshed worktrees per project (None if they could not be fetched)
+pub type TmuxSnapshot = (Vec<String>, HashMap<Uuid, Option<Vec<Worktree>>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum Action {
