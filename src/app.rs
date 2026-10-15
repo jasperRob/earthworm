@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     action::{Action, JobCompletion},
-    components::{Component, fps::FpsCounter, home::Home, notification::Notification},
+    components::{Component, home::Home, notification::Notification},
     config::Config,
     pending::{JobId, Pending},
     project::Project,
@@ -58,11 +58,7 @@ impl App {
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![
-                Box::new(Home::new()),
-                Box::new(FpsCounter::default()),
-                Box::new(Notification::default()),
-            ],
+            components: vec![Box::new(Home::new()), Box::new(Notification::default())],
             should_quit: false,
             should_suspend: false,
             config: Config::new()?,
