@@ -8,11 +8,14 @@ use crate::{
     action::Action,
     app::Mode,
     components::popups::{
-        PopupOutcome, PopupState, edit_project::EditProjectPopup, edit_session::EditSessionPopup,
-        help::HelpPopup, new_project::NewProjectPopup, new_session::NewSessionPopup,
-        new_session_from_worktree::NewSessionFromWorktreePopup,
-        new_session_in_project::NewSessionInProjectPopup, remove_project::RemoveProjectPopup,
-        remove_session::RemoveSessionPopup, remove_worktree::RemoveWorktreePopup,
+        PopupOutcome, PopupState,
+        help::HelpPopup,
+        project::{edit_project, new_project, remove_project},
+        session::{
+            edit_session, new_session, new_session_from_worktree, new_session_in_project,
+            remove_session,
+        },
+        worktree::remove_worktree,
     },
     config::key_event_to_string,
     pending::{Activity, PendingTarget, apply_placeholders},
@@ -335,19 +338,17 @@ impl Component for Home {
                 self.list_state
                     .select(Some(self.search_matches[self.search_cursor]));
             }
-            Action::CmdAddProject => {
-                self.popup_state = PopupState::Open(Box::new(NewProjectPopup::new()))
-            }
+            Action::CmdAddProject => self.popup_state = PopupState::Open(Box::new(new_project())),
             Action::CmdAddSessionInProject if !self.selected_is_pending() => {
                 if let Some(selected) = self.list_state.selected() {
                     match self.list_entries.get(selected) {
                         Some(ListEntry::Project(p)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
+                                PopupState::Open(Box::new(new_session_in_project(p)));
                         }
                         Some(ListEntry::ProjectSession(p, _)) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(NewSessionInProjectPopup::new(p)));
+                                PopupState::Open(Box::new(new_session_in_project(p)));
                         }
                         _ => {}
                     }
@@ -362,9 +363,9 @@ impl Component for Home {
                 match selected {
                     Some(ListEntry::AvailableWorktree(p, wt)) => {
                         self.popup_state =
-                            PopupState::Open(Box::new(NewSessionFromWorktreePopup::new(p, wt)))
+                            PopupState::Open(Box::new(new_session_from_worktree(p, wt)))
                     }
-                    _ => self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new())),
+                    _ => self.popup_state = PopupState::Open(Box::new(new_session())),
                 }
             }
             Action::CmdEdit if !self.selected_is_pending() => {
@@ -373,17 +374,14 @@ impl Component for Home {
                 {
                     match entry {
                         ListEntry::Project(p) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditProjectPopup::new(p.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_project(p.clone())))
                         }
                         ListEntry::ProjectSession(_, s) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_session(s.clone())))
                         }
                         ListEntry::AvailableWorktree(_, _) => {}
                         ListEntry::Session(s) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(EditSessionPopup::new(s.clone())))
+                            self.popup_state = PopupState::Open(Box::new(edit_session(s.clone())))
                         }
                     }
                 }
@@ -395,26 +393,22 @@ impl Component for Home {
                     match entry {
                         ListEntry::Project(p) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveProjectPopup::new(p.clone())));
+                                PopupState::Open(Box::new(remove_project(p.clone())));
                         }
                         ListEntry::ProjectSession(_, s) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                                PopupState::Open(Box::new(remove_session(s.clone())));
                         }
                         ListEntry::Session(s) => {
                             self.popup_state =
-                                PopupState::Open(Box::new(RemoveSessionPopup::new(s.clone())));
+                                PopupState::Open(Box::new(remove_session(s.clone())));
                         }
                         ListEntry::AvailableWorktree(p, wt) => {
-                            self.popup_state = PopupState::Open(Box::new(
-                                RemoveWorktreePopup::new(wt.clone(), p.clone()),
-                            ));
+                            self.popup_state =
+                                PopupState::Open(Box::new(remove_worktree(wt.clone(), p.clone())));
                         }
                     }
                 }
-            }
-            Action::CancelInput => {
-                self.popup_state = PopupState::Closed;
             }
             Action::CmdAttach if !self.selected_is_pending() => {
                 let mut session: Option<Session> = None;
