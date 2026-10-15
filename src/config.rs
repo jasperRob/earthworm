@@ -133,11 +133,19 @@ impl<'de> Deserialize<'de> for KeyBindings {
             .map(|(mode, inner_map)| {
                 let converted_inner_map = inner_map
                     .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
-                    .collect();
-                (mode, converted_inner_map)
+                    .map(|(key_str, cmd)| {
+                        parse_key_sequence(&key_str)
+                            .map(|keys| (keys, cmd))
+                            .map_err(|e| {
+                                serde::de::Error::custom(format!(
+                                    "invalid keybinding `{key_str}`: {e}"
+                                ))
+                            })
+                    })
+                    .collect::<Result<_, D::Error>>()?;
+                Ok((mode, converted_inner_map))
             })
-            .collect();
+            .collect::<Result<_, D::Error>>()?;
 
         Ok(KeyBindings(keybindings))
     }
@@ -509,6 +517,45 @@ mod tests {
             &Action::Quit
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_invalid_keybinding_is_error() {
+        let raw = r#"{ "keybindings": { "Home": { "<Ctrl-xyz>": "Quit" } } }"#;
+        let err = json5::from_str::<Config>(raw).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid keybinding `<Ctrl-xyz>`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_keybinding_is_config_error() {
+        // Same path as Config::new, which App::new propagates with `?`.
+        let raw = r#"{ "keybindings": { "Home": { "<Ctrl-xyz>": "Quit" } } }"#;
+        let err = config::Config::builder()
+            .add_source(config::File::from_str(raw, config::FileFormat::Json5))
+            .build()
+            .unwrap()
+            .try_deserialize::<Config>()
+            .unwrap_err();
+        // The config crate lowercases keys.
+        assert!(
+            err.to_string()
+                .to_lowercase()
+                .contains("invalid keybinding `<ctrl-xyz>`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_default_config_binds_tab_to_next_session_history() {
+        let c: Config = json5::from_str(CONFIG).unwrap();
+        let home = c.keybindings.0.get(&Mode::Home).unwrap();
+        assert_eq!(
+            home.get(&vec![KeyEvent::new(KeyCode::Tab, KeyModifiers::empty())]),
+            Some(&Action::CmdNextSessionHistory)
+        );
     }
 
     #[test]
