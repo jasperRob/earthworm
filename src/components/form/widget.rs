@@ -14,7 +14,10 @@ use ratatui::{
 };
 
 use crate::{
-    components::form::FormInput,
+    components::form::{
+        FormInput,
+        input::{expand_home, normalise_path},
+    },
     theme::{ERROR, ERROR_FOCUSED, SECONDARY},
 };
 
@@ -226,7 +229,18 @@ impl Form {
                 }
                 FormEvent::Continue
             }
-            KeyCode::Enter => FormEvent::Submit,
+            KeyCode::Enter => {
+                self.validate();
+                match self.first_invalid_input() {
+                    None => FormEvent::Submit,
+                    Some(index) => {
+                        if !self.form_input_states[index].form_input.readonly {
+                            self.focused = index;
+                        }
+                        FormEvent::Continue
+                    }
+                }
+            }
             KeyCode::Esc => FormEvent::Cancel,
             _ => FormEvent::Continue,
         }
@@ -367,6 +381,12 @@ impl Form {
         });
     }
 
+    fn first_invalid_input(&self) -> Option<usize> {
+        self.form_input_states
+            .iter()
+            .position(|s| !s.hidden && !s.is_valid)
+    }
+
     // TODO: These should take a form input state as a param. The use of self should be separated
     fn move_cursor_left(&mut self) {
         let moved = self.form_input_states[self.focused]
@@ -429,7 +449,8 @@ impl Form {
         if input.ends_with("/") {
             return String::new();
         }
-        let path = Path::new(&input);
+        let expanded = expand_home(&input);
+        let path = expanded.as_path();
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -464,16 +485,23 @@ impl Form {
             .unwrap_or_default()
     }
 
+    /// Returns the value of the input at `index`. Path inputs are returned normalised.
     pub fn value(&self, index: usize) -> String {
-        self.form_input_states[index].value.clone()
+        let state = &self.form_input_states[index];
+        if state.form_input.is_path() && !state.value.is_empty() {
+            normalise_path(&state.value).to_string_lossy().into_owned()
+        } else {
+            state.value.clone()
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{env, path::PathBuf, time::Duration};
 
     use crossterm::event::KeyModifiers;
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -715,11 +743,21 @@ mod tests {
     // TODO:
     // This should also work fine with unicode chars
 
+    /// Creates a temp dir containing only a `src` dir. Returns it with its path, which
+    /// ends in a `/`.
+    fn suggestion_dir() -> (TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let root = format!("{}/", dir.path().display());
+        (dir, root)
+    }
+
     #[tokio::test]
     async fn test_right_arrow_at_string_end_autocompletes_path() {
+        let (_dir, root) = suggestion_dir();
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
-        form.form_input_states[0].value = String::from("./");
-        form.form_input_states[0].cursor_position = 2;
+        form.form_input_states[0].value = root.clone();
+        form.form_input_states[0].cursor_position = root.chars().count();
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()));
         settle_suggestion(&mut form);
@@ -728,14 +766,16 @@ mod tests {
             Some("rc")
         );
         form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
-        assert_eq!(form.form_input_states[0].value, "./src");
+        assert_eq!(form.form_input_states[0].value, format!("{root}src"));
     }
 
     #[tokio::test]
     async fn test_right_arrow_mid_string_does_not_autocompletes() {
+        let (_dir, root) = suggestion_dir();
+        let parent = root.trim_end_matches('/');
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
-        form.form_input_states[0].value = String::from(".s");
-        form.form_input_states[0].cursor_position = 1;
+        form.form_input_states[0].value = format!("{parent}s");
+        form.form_input_states[0].cursor_position = parent.chars().count();
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
         settle_suggestion(&mut form);
@@ -744,14 +784,15 @@ mod tests {
             Some("rc")
         );
         form.match_standard_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
-        assert_eq!(form.form_input_states[0].value, "./s");
+        assert_eq!(form.form_input_states[0].value, format!("{root}s"));
     }
 
     #[tokio::test]
     async fn test_backspace_at_string_end_recomputes_suggestion() {
+        let (_dir, root) = suggestion_dir();
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
-        form.form_input_states[0].value = String::from("./sx");
-        form.form_input_states[0].cursor_position = 4;
+        form.form_input_states[0].value = format!("{root}sx");
+        form.form_input_states[0].cursor_position = root.chars().count() + 2;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
         settle_suggestion(&mut form);
@@ -763,9 +804,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_backspace_mid_string_recomputes_suggestion() {
+        let (_dir, root) = suggestion_dir();
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
-        form.form_input_states[0].value = String::from("./xs");
-        form.form_input_states[0].cursor_position = 3;
+        form.form_input_states[0].value = format!("{root}xs");
+        form.form_input_states[0].cursor_position = root.chars().count() + 1;
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
         settle_suggestion(&mut form);
@@ -777,9 +819,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_typing_hides_suggestion_until_recomputed() {
+        let (_dir, root) = suggestion_dir();
         let mut form: Form = Form::standard().inputs(vec![FormInput::new().path()]);
-        form.form_input_states[0].value = String::from("./s");
-        form.form_input_states[0].cursor_position = 3;
+        form.form_input_states[0].value = format!("{root}s");
+        form.form_input_states[0].cursor_position = root.chars().count() + 1;
         form.form_input_states[0].suggested_path = Some(String::from("rc"));
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
@@ -803,5 +846,94 @@ mod tests {
             .unwrap();
         form.apply_suggestions();
         assert_eq!(form.form_input_states[0].suggested_path.as_deref(), None);
+    }
+
+    fn press_enter(form: &mut Form) -> FormEvent {
+        form.match_standard_input_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
+    }
+
+    #[test]
+    fn test_enter_with_empty_required_input_does_not_submit() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Continue));
+    }
+
+    #[test]
+    fn test_enter_with_valid_inputs_submits() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .initial_value(String::from("hello"))
+                .required(),
+        ]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
+    }
+
+    #[test]
+    fn test_enter_focuses_first_invalid_input() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .initial_value(String::from("hello"))
+                .required(),
+            FormInput::new().required(),
+            FormInput::new().required(),
+        ]);
+        assert_eq!(form.focused, 0);
+        assert!(matches!(press_enter(&mut form), FormEvent::Continue));
+        assert_eq!(form.focused, 1);
+    }
+
+    #[test]
+    fn test_enter_ignores_hidden_invalid_input() {
+        let mut hidden = FormInput::new().required();
+        hidden.dependant_on = Some((0, true));
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .initial_value(String::from("false"))
+                .required(),
+            hidden,
+        ]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
+    }
+
+    #[test]
+    fn test_enter_with_missing_path_does_not_submit() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .path()
+                .initial_value(missing.to_string_lossy().into_owned())
+                .required(),
+        ]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Continue));
+        fs::create_dir(&missing).unwrap();
+        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
+    }
+
+    #[test]
+    fn test_value_normalises_path_input() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("child")).unwrap();
+        let form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .path()
+                .initial_value(format!("{}/./child/../child/", dir.path().display())),
+            FormInput::new().path().initial_value(String::from("~")),
+        ]);
+        assert_eq!(PathBuf::from(form.value(0)), dir.path().join("child"));
+        assert_eq!(
+            PathBuf::from(form.value(1)),
+            PathBuf::from(env::var_os("HOME").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_value_does_not_normalise_text_input() {
+        let form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .initial_value(String::from("./foo"))
+                .required(),
+        ]);
+        assert_eq!(form.value(0), "./foo");
     }
 }
