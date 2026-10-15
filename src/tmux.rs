@@ -23,6 +23,43 @@ pub fn get_tmux_session_path(
     Ok(String::from(path))
 }
 
+// tmux resolves `-t` session targets by exact name, then prefix, then glob.
+// A leading `=` restricts it to an exact match, so a missing `api` can't
+// resolve to `api-v2`.
+fn exact_target(tmux_session_name: &str) -> String {
+    format!("={tmux_session_name}")
+}
+
+fn kill_session_args(tmux_session_name: &str) -> Vec<String> {
+    vec![
+        String::from("kill-session"),
+        String::from("-t"),
+        exact_target(tmux_session_name),
+    ]
+}
+
+fn rename_session_args(from_tmux_session_name: &str, to_tmux_session_name: &str) -> Vec<String> {
+    vec![
+        String::from("rename-session"),
+        String::from("-t"),
+        exact_target(from_tmux_session_name),
+        String::from(to_tmux_session_name),
+    ]
+}
+
+fn attach_session_args(tmux_session_name: &str, inside_tmux: bool) -> Vec<String> {
+    let tmux_cmd = if inside_tmux {
+        "switch-client"
+    } else {
+        "attach-session"
+    };
+    vec![
+        String::from(tmux_cmd),
+        String::from("-t"),
+        exact_target(tmux_session_name),
+    ]
+}
+
 pub fn fetch_tmux_sessions() -> color_eyre::Result<Vec<String>> {
     let output = std::process::Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])
@@ -56,18 +93,18 @@ pub fn new_tmux_session(
     ]);
     let status = cmd.status()?;
     if !status.success() {
-        return Err(color_eyre::eyre::eyre!("tmux new-sesssion failed"));
+        return Err(color_eyre::eyre::eyre!("tmux new-session failed"));
     }
     Ok(())
 }
 
 pub fn kill_tmux_session(tmux_session_name: String) -> color_eyre::Result<()> {
     let status = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", &tmux_session_name])
+        .args(kill_session_args(&tmux_session_name))
         .stderr(std::process::Stdio::null())
         .status()?;
     if !status.success() {
-        return Err(color_eyre::eyre::eyre!("tmux kill-sesssion failed"));
+        return Err(color_eyre::eyre::eyre!("tmux kill-session failed"));
     }
     Ok(())
 }
@@ -77,31 +114,23 @@ pub fn rename_tmux_session(
     to_tmux_session_name: String,
 ) -> color_eyre::Result<()> {
     let status = std::process::Command::new("tmux")
-        .args([
-            "rename-session",
-            "-t",
+        .args(rename_session_args(
             &from_tmux_session_name,
             &to_tmux_session_name,
-        ])
+        ))
         .stderr(std::process::Stdio::null())
         .status()?;
     if !status.success() {
-        return Err(color_eyre::eyre::eyre!("tmux rename-sesssion failed"));
+        return Err(color_eyre::eyre::eyre!("tmux rename-session failed"));
     }
     Ok(())
 }
 
 pub fn attach_tmux_session(tmux_session_name: String) -> color_eyre::Result<()> {
-    let tmux_cmd = if std::env::var("TMUX").is_ok() {
-        "switch-client"
-    } else {
-        "attach-session"
-    };
-    let status = std::process::Command::new("tmux")
-        .args([tmux_cmd, "-t", &tmux_session_name])
-        .status()?;
+    let args = attach_session_args(&tmux_session_name, std::env::var("TMUX").is_ok());
+    let status = std::process::Command::new("tmux").args(&args).status()?;
     if !status.success() {
-        return Err(color_eyre::eyre::eyre!(format!("tmux {} failed", tmux_cmd)));
+        return Err(color_eyre::eyre::eyre!(format!("tmux {} failed", args[0])));
     }
     Ok(())
 }
@@ -113,7 +142,10 @@ mod tests {
     use crate::{
         project::Project,
         session::Session,
-        tmux::{get_tmux_session_name, get_tmux_session_path},
+        tmux::{
+            attach_session_args, exact_target, get_tmux_session_name, get_tmux_session_path,
+            kill_session_args, rename_session_args,
+        },
         worktree::Worktree,
     };
 
@@ -193,5 +225,41 @@ mod tests {
             worktree: None,
         };
         assert!(get_tmux_session_path(&session, None).is_err());
+    }
+    #[test]
+    fn test_exact_target_prefixes_equals() {
+        assert_eq!(exact_target("session-name"), "=session-name");
+    }
+    #[test]
+    fn test_exact_target_keeps_glob_characters_literal() {
+        assert_eq!(exact_target("api*"), "=api*");
+        assert_eq!(exact_target("api[v2]"), "=api[v2]");
+    }
+    #[test]
+    fn test_exact_target_does_not_widen_prefix_like_names() {
+        assert_eq!(exact_target("api"), "=api");
+        assert_ne!(exact_target("api"), exact_target("api-v2"));
+    }
+    #[test]
+    fn test_kill_session_args() {
+        assert_eq!(kill_session_args("api"), ["kill-session", "-t", "=api"]);
+    }
+    #[test]
+    fn test_rename_session_args() {
+        assert_eq!(
+            rename_session_args("api", "api-v2"),
+            ["rename-session", "-t", "=api", "api-v2"]
+        );
+    }
+    #[test]
+    fn test_attach_session_args() {
+        assert_eq!(
+            attach_session_args("api", false),
+            ["attach-session", "-t", "=api"]
+        );
+        assert_eq!(
+            attach_session_args("api", true),
+            ["switch-client", "-t", "=api"]
+        );
     }
 }

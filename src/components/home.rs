@@ -52,6 +52,17 @@ impl ListEntry {
             },
         }
     }
+
+    /// Whether the entry's name (or worktree path) contains `query`, which
+    /// must already be lowercase
+    fn matches_search(&self, query: &str) -> bool {
+        let contains = |text: &str| text.to_lowercase().contains(query);
+        match self {
+            ListEntry::Project(p) => contains(&p.name),
+            ListEntry::ProjectSession(_, s) | ListEntry::Session(s) => contains(&s.name),
+            ListEntry::AvailableWorktree(_, wt) => contains(&wt.name) || contains(&wt.path),
+        }
+    }
 }
 
 pub struct Home {
@@ -174,6 +185,35 @@ impl Home {
             self.list_state
                 .select(Some(i.min(self.list_entries.len() - 1)));
         }
+
+        // Match indices point into the old list, so refresh them
+        if self.search.is_some() {
+            self.recompute_search_matches();
+        }
+    }
+
+    fn recompute_search_matches(&mut self) {
+        let query = self.search.as_deref().unwrap_or_default().to_lowercase();
+        self.search_matches = if query.is_empty() {
+            Vec::new()
+        } else {
+            self.list_entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.matches_search(&query))
+                .map(|(index, _)| index)
+                .collect()
+        };
+        self.search_cursor = self
+            .search_cursor
+            .min(self.search_matches.len().saturating_sub(1));
+    }
+
+    fn select_first_search_match(&mut self) {
+        self.search_cursor = 0;
+        if let Some(&first_match) = self.search_matches.first() {
+            self.list_state.select(Some(first_match));
+        }
     }
 
     fn push_to_session_history(&mut self, session: Session) {
@@ -216,6 +256,8 @@ impl Component for Home {
                     if self.search_is_capturing {
                         self.search_is_capturing = false;
                         self.search = None;
+                        self.search_matches.clear();
+                        self.search_cursor = 0;
                     }
                     Ok(None)
                 }
@@ -224,30 +266,18 @@ impl Component for Home {
                         if let Some(search) = &mut self.search {
                             search.push(c);
                         }
-                        self.search_matches = self
-                            .list_entries
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, item)| {
-                                let text = match item {
-                                    ListEntry::Project(p) => p.name.as_str(),
-                                    ListEntry::ProjectSession(_, s) => s.name.as_str(),
-                                    ListEntry::AvailableWorktree(_, w) => w.path.as_str(),
-                                    ListEntry::Session(s) => s.name.as_str(),
-                                };
-                                let query = self.search.clone().unwrap_or_default();
-                                if text.contains(&query) {
-                                    Some(index)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-
-                        self.search_cursor = 0;
-                        if let Some(&first_match) = self.search_matches.first() {
-                            self.list_state.select(Some(first_match))
+                        self.recompute_search_matches();
+                        self.select_first_search_match();
+                    }
+                    Ok(None)
+                }
+                KeyCode::Backspace => {
+                    if self.search_is_capturing {
+                        if let Some(search) = &mut self.search {
+                            search.pop();
                         }
+                        self.recompute_search_matches();
+                        self.select_first_search_match();
                     }
                     Ok(None)
                 }
@@ -324,14 +354,17 @@ impl Component for Home {
                 }
             }
             Action::CmdAddSession if !self.selected_is_pending() => {
-                if let Some(selected) = self.list_state.selected() {
-                    match self.list_entries.get(selected) {
-                        Some(ListEntry::AvailableWorktree(p, wt)) => {
-                            self.popup_state =
-                                PopupState::Open(Box::new(NewSessionFromWorktreePopup::new(p, wt)))
-                        }
-                        _ => self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new())),
+                // Nothing is selected on an empty list, which still allows a plain session
+                let selected = self
+                    .list_state
+                    .selected()
+                    .and_then(|i| self.list_entries.get(i));
+                match selected {
+                    Some(ListEntry::AvailableWorktree(p, wt)) => {
+                        self.popup_state =
+                            PopupState::Open(Box::new(NewSessionFromWorktreePopup::new(p, wt)))
                     }
+                    _ => self.popup_state = PopupState::Open(Box::new(NewSessionPopup::new())),
                 }
             }
             Action::CmdEdit if !self.selected_is_pending() => {
@@ -530,6 +563,7 @@ fn with_activity(line: Line<'_>, spinner: char, activity: Activity) -> Line<'_> 
 mod tests {
     use std::collections::HashMap;
 
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use uuid::Uuid;
 
     use super::{Home, ListEntry};
@@ -539,6 +573,7 @@ mod tests {
         pending::{Activity, Pending, PendingTarget},
         project::Project,
         session::Session,
+        worktree::Worktree,
     };
 
     fn project() -> Project {
@@ -693,5 +728,226 @@ mod tests {
         .unwrap();
         select_session(&mut home, session.id);
         assert!(!home.selected_is_pending());
+    }
+
+    fn named_session(name: &str) -> Session {
+        Session {
+            name: name.to_string(),
+            ..session(None)
+        }
+    }
+
+    fn press(home: &mut Home, code: KeyCode) {
+        home.handle_key_event(KeyEvent::new(code, KeyModifiers::empty()))
+            .unwrap();
+    }
+
+    fn search(home: &mut Home, query: &str) {
+        home.update(Action::CmdStartSearch).unwrap();
+        for c in query.chars() {
+            press(home, KeyCode::Char(c));
+        }
+    }
+
+    fn state_updated(home: &mut Home, projects: Vec<Project>, sessions: Vec<Session>) {
+        home.update(Action::StateUpdated(
+            projects.into_iter().map(|p| (p.id, p)).collect(),
+            sessions.into_iter().map(|s| (s.id, s)).collect(),
+            Vec::new(),
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn test_add_session_on_empty_list_opens_popup() {
+        let mut home = home(Vec::new(), Vec::new(), Vec::new());
+        assert_eq!(home.list_state.selected(), None);
+        home.update(Action::CmdAddSession).unwrap();
+        assert!(matches!(home.popup_state, PopupState::Open(_)));
+    }
+
+    #[test]
+    fn test_typing_search_selects_first_match() {
+        let sessions = vec![
+            named_session("alpha"),
+            named_session("beta"),
+            named_session("gamma"),
+        ];
+        let mut home = home(Vec::new(), sessions, Vec::new());
+        search(&mut home, "ga");
+        assert_eq!(home.search_matches, vec![2]);
+        assert_eq!(home.list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_backspace_widens_search_matches() {
+        let sessions = vec![named_session("bar"), named_session("baz")];
+        let mut home = home(Vec::new(), sessions, Vec::new());
+        search(&mut home, "bar");
+        assert_eq!(home.search_matches, vec![0]);
+        press(&mut home, KeyCode::Backspace);
+        assert_eq!(home.search.as_deref(), Some("ba"));
+        assert_eq!(home.search_matches, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_search_is_case_insensitive() {
+        let sessions = vec![named_session("alpha"), named_session("myServer")];
+        let mut home = home(Vec::new(), sessions, Vec::new());
+        search(&mut home, "MYs");
+        assert_eq!(home.search_matches, vec![1]);
+    }
+
+    #[test]
+    fn test_search_matches_worktree_name_and_path() {
+        let mut project = project();
+        project.worktrees.push(Worktree {
+            name: "feature".to_string(),
+            path: "/tmp/checkout".to_string(),
+        });
+        let mut home = home(vec![project], Vec::new(), Vec::new());
+        search(&mut home, "FEAT");
+        assert_eq!(home.search_matches, vec![1]);
+        press(&mut home, KeyCode::Esc);
+        search(&mut home, "checkout");
+        assert_eq!(home.search_matches, vec![1]);
+    }
+
+    #[test]
+    fn test_esc_clears_search_matches() {
+        let sessions = vec![named_session("alpha"), named_session("beta")];
+        let mut home = home(Vec::new(), sessions, Vec::new());
+        search(&mut home, "a");
+        assert_eq!(home.search_matches, vec![0, 1]);
+        press(&mut home, KeyCode::Esc);
+        assert_eq!(home.search, None);
+        assert!(home.search_matches.is_empty());
+        assert_eq!(home.search_cursor, 0);
+
+        home.list_state.select(Some(0));
+        home.update(Action::CmdSearchNext).unwrap();
+        assert_eq!(home.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_search_matches_recomputed_after_state_updated() {
+        let alpha = named_session("alpha");
+        let beta = named_session("beta");
+        let mut home = home(Vec::new(), vec![alpha.clone(), beta.clone()], Vec::new());
+        search(&mut home, "beta");
+        assert_eq!(home.search_matches, vec![1]);
+
+        // A new entry sorting first shifts every index
+        state_updated(
+            &mut home,
+            Vec::new(),
+            vec![named_session("abeta"), alpha, beta],
+        );
+        assert_eq!(home.search_matches, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_attach_pushes_session_history() {
+        let session = session(None);
+        let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
+        select_session(&mut home, session.id);
+        assert_eq!(
+            home.update(Action::CmdAttach).unwrap(),
+            Some(Action::AttachSession(session.clone()))
+        );
+        assert_eq!(home.session_history, [session]);
+        assert_eq!(home.session_history_index, 0);
+    }
+
+    #[test]
+    fn test_session_history_moves_selection() {
+        let alpha = named_session("alpha");
+        let beta = named_session("beta");
+        let mut home = home(Vec::new(), vec![alpha.clone(), beta.clone()], Vec::new());
+        select_session(&mut home, alpha.id);
+        home.update(Action::CmdAttach).unwrap();
+        select_session(&mut home, beta.id);
+        home.update(Action::CmdAttach).unwrap();
+
+        home.update(Action::CmdPrevSessionHistory).unwrap();
+        assert_eq!(home.list_state.selected(), Some(0));
+        home.update(Action::CmdNextSessionHistory).unwrap();
+        assert_eq!(home.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_removed_sessions_are_dropped_from_history() {
+        let alpha = named_session("alpha");
+        let beta = named_session("beta");
+        let mut home = home(Vec::new(), vec![alpha.clone(), beta.clone()], Vec::new());
+        select_session(&mut home, alpha.id);
+        home.update(Action::CmdAttach).unwrap();
+        select_session(&mut home, beta.id);
+        home.update(Action::CmdAttach).unwrap();
+
+        state_updated(&mut home, Vec::new(), vec![alpha.clone()]);
+        assert_eq!(home.session_history, [alpha]);
+        assert_eq!(home.session_history_index, 0);
+    }
+
+    #[test]
+    fn test_projects_are_sorted_by_name() {
+        let zeta = Project {
+            name: "zeta".to_string(),
+            ..project()
+        };
+        let alpha = Project {
+            name: "alpha".to_string(),
+            ..project()
+        };
+        let home = home(vec![zeta.clone(), alpha.clone()], Vec::new(), Vec::new());
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(a), ListEntry::Project(z)]
+                if a.id == alpha.id && z.id == zeta.id
+        ));
+    }
+
+    #[test]
+    fn test_worktree_used_by_session_is_hidden() {
+        let mut project = project();
+        let used = Worktree {
+            name: "used".to_string(),
+            path: "/tmp/used".to_string(),
+        };
+        let free = Worktree {
+            name: "free".to_string(),
+            path: "/tmp/free".to_string(),
+        };
+        project.worktrees = vec![used.clone(), free.clone()];
+        let session = Session {
+            path: Some(used.path.clone()),
+            ..session(Some(project.id))
+        };
+        project.sessions.push(session.id);
+        let home = home(vec![project], vec![session.clone()], Vec::new());
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [
+                ListEntry::Project(_),
+                ListEntry::ProjectSession(_, s),
+                ListEntry::AvailableWorktree(_, wt),
+            ] if s.id == session.id && *wt == free
+        ));
+    }
+
+    #[test]
+    fn test_orphan_sessions_are_listed_after_projects() {
+        let project = Project {
+            name: "zeta".to_string(),
+            ..project()
+        };
+        let orphan = named_session("alpha");
+        let home = home(vec![project.clone()], vec![orphan.clone()], Vec::new());
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(p), ListEntry::Session(s)]
+                if p.id == project.id && s.id == orphan.id
+        ));
     }
 }
