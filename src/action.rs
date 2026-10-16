@@ -39,6 +39,10 @@ pub enum Action {
     CmdSearchPrev,
     CmdAttach,
     CmdEdit,
+    CmdActivate,
+    CmdCollapse,
+    CmdExpand,
+    CmdToggleCollapse,
     CmdNextSessionHistory,
     CmdPrevSessionHistory,
     // Project

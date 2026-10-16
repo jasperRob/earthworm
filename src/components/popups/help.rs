@@ -31,6 +31,10 @@ const DISPLAY_ORDER: &[Action] = &[
     Action::CmdDeleteItem,
     Action::CmdAttach,
     Action::CmdEdit,
+    Action::CmdActivate,
+    Action::CmdCollapse,
+    Action::CmdExpand,
+    Action::CmdToggleCollapse,
     Action::CmdNextSessionHistory,
     Action::CmdPrevSessionHistory,
 ];
