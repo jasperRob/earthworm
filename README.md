@@ -50,6 +50,7 @@ earthworm
 | `/`       | Start search               |
 | `n`       | Next search match          |
 | `N`       | Previous search match      |
+| `Esc`     | Clear search               |
 | `Space p` | New project                |
 | `Space s` | New session                |
 | `Space a` | Attach to selected session |

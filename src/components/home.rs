@@ -21,7 +21,7 @@ use crate::{
     pending::{Activity, PendingTarget, apply_placeholders},
     project::Project,
     session::Session,
-    theme::SECONDARY,
+    theme::{ERROR, SECONDARY},
     tmux::get_tmux_session_path,
     worktree::Worktree,
 };
@@ -405,7 +405,11 @@ impl Home {
                     .map(|key| match key {
                         "space" => "␣",
                         "enter" => "⏎",
-                        key => key,
+                        // A shifted letter is already written in uppercase
+                        key => key
+                            .strip_prefix("shift-")
+                            .filter(|letter| letter.chars().count() == 1)
+                            .unwrap_or(key),
                     })
                     .collect()
             })
@@ -419,26 +423,70 @@ impl Home {
             .into_iter()
             .filter_map(|(action, label)| Some((self.key_hint(&action)?, label)))
             .collect();
-        let hint_width = |(keys, label): &(String, &str)| keys.chars().count() + label.len() + 3;
+        let Some((help, others)) = hints.split_last() else {
+            return Line::default();
+        };
         // Help comes last, so reserve its room up front
-        let mut used = 1 + hints.last().map_or(0, hint_width);
-        let mut spans = vec![Span::raw(" ")];
-        for (i, hint) in hints.iter().enumerate() {
-            let is_help = i + 1 == hints.len();
-            if !is_help {
-                if used + hint_width(hint) > width {
-                    continue;
-                }
+        let mut used = 1 + hint_width(help);
+        let mut fitting: Vec<(String, &str)> = Vec::new();
+        for hint in others {
+            if used + hint_width(hint) <= width {
                 used += hint_width(hint);
+                fitting.push(hint.clone());
             }
-            let (keys, label) = hint;
-            spans.push(Span::styled(
-                keys.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(format!(" {label}  ")));
+        }
+        fitting.push(help.clone());
+        hint_line(&fitting)
+    }
+
+    /// The selected row's location on the left of the footer, and hints for its actions on the
+    /// right, both fitted into `width`
+    fn location_and_hints(&self, width: usize) -> (Line<'static>, Line<'static>) {
+        let (name, path) = self.selected_location().unwrap_or_default();
+        let name = format!(" {name}  ");
+        let path = abbreviate_home(&path, self.home_dir.as_deref());
+        // The location keeps its name and some of its path, and the hints get the rest
+        let location_width = name.chars().count() + path.chars().count().min(FOOTER_PATH_WIDTH);
+        let hints = self.footer_hints(width.saturating_sub(location_width));
+        let path_width = width.saturating_sub(hints.width() + name.chars().count());
+        let location = Line::from(vec![
+            Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(truncate_start(&path, path_width)),
+        ]);
+        (location, hints)
+    }
+
+    /// The search query and which match is selected, on the left of the footer
+    fn search_status(&self, query: &str) -> Line<'static> {
+        let mut spans = vec![Span::raw(format!(" /{query}  "))];
+        if !query.is_empty() {
+            spans.push(if self.search_matches.is_empty() {
+                Span::styled("no matches", Style::default().fg(ERROR))
+            } else {
+                Span::raw(format!(
+                    "{}/{}",
+                    self.search_cursor + 1,
+                    self.search_matches.len()
+                ))
+            });
         }
         Line::from(spans)
+    }
+
+    fn search_hints(&self) -> Line<'static> {
+        let hints: Vec<(String, &str)> = if self.search_is_capturing {
+            vec![("⏎".to_string(), "done"), ("esc".to_string(), "cancel")]
+        } else {
+            [
+                (Action::CmdSearchNext, "next"),
+                (Action::CmdSearchPrev, "previous"),
+            ]
+            .into_iter()
+            .filter_map(|(action, label)| Some((self.key_hint(&action)?, label)))
+            .chain([("esc".to_string(), "clear")])
+            .collect()
+        };
+        hint_line(&hints)
     }
 
     /// The selected row's project and name, and its path
@@ -462,6 +510,7 @@ impl Home {
 
     fn entry_line(&self, entry: &ListEntry, next: Option<&ListEntry>) -> Line<'static> {
         let dim = Style::default().add_modifier(Modifier::DIM);
+        let query = self.search.as_deref().unwrap_or_default().to_lowercase();
         let branch = |project_id: Uuid| {
             // The last row under a project closes off the tree
             let glyph = if next.and_then(ListEntry::parent_id) == Some(project_id) {
@@ -471,7 +520,7 @@ impl Home {
             };
             Span::styled(format!("   {glyph} "), dim)
         };
-        match entry {
+        let mut spans = match entry {
             ListEntry::Project(p) => {
                 let marker = if self.collapsed.contains(&p.id) {
                     '▸'
@@ -483,24 +532,33 @@ impl Home {
                     .iter()
                     .filter(|e| e.parent_id() == Some(p.id))
                     .count();
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {marker} {}", p.name),
-                        Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
-                    ),
-                    Span::styled(format!(" ({count})"), dim),
-                ])
+                let style = Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY);
+                let mut spans = vec![Span::styled(format!(" {marker} "), style)];
+                spans.extend(highlight(&p.name, &query, style));
+                spans.push(Span::styled(format!(" ({count})"), dim));
+                spans
             }
-            ListEntry::ProjectSession(p, s) => Line::from(vec![
-                branch(p.id),
-                Span::raw(format!("{SESSION_GLYPH} {}", s.name)),
-            ]),
-            ListEntry::AvailableWorktree(p, wt) => Line::from(vec![
-                branch(p.id),
-                Span::styled(format!("{WORKTREE_GLYPH} {}", wt.name), dim),
-            ]),
-            ListEntry::Session(s) => Line::from(format!(" {SESSION_GLYPH} {}", s.name)),
-        }
+            ListEntry::ProjectSession(p, s) => {
+                let mut spans = vec![branch(p.id), Span::raw(format!("{SESSION_GLYPH} "))];
+                spans.extend(highlight(&s.name, &query, Style::default()));
+                spans
+            }
+            ListEntry::AvailableWorktree(p, wt) => {
+                let mut spans = vec![
+                    branch(p.id),
+                    Span::styled(format!("{WORKTREE_GLYPH} "), dim),
+                ];
+                spans.extend(highlight(&wt.name, &query, dim));
+                spans
+            }
+            ListEntry::Session(s) => {
+                let mut spans = vec![Span::raw(format!(" {SESSION_GLYPH} "))];
+                spans.extend(highlight(&s.name, &query, Style::default()));
+                spans
+            }
+        };
+        spans.retain(|span| !span.content.is_empty());
+        Line::from(spans)
     }
 
     fn push_to_session_history(&mut self, session: Session) {
@@ -533,7 +591,8 @@ impl Component for Home {
                     Ok(None)
                 }
                 KeyCode::Esc => {
-                    if self.search_is_capturing {
+                    // Also clears a search kept after Enter, which would otherwise stay in the footer
+                    if self.search.is_some() {
                         self.search_is_capturing = false;
                         self.search = None;
                         self.search_matches.clear();
@@ -743,47 +802,35 @@ impl Component for Home {
             .block(Block::default())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        let (name, path) = self.selected_location().unwrap_or_default();
-        let name = format!(" {name}  ");
-        let path = abbreviate_home(&path, self.home_dir.as_deref());
-
-        let search_bar = Paragraph::new(format!(
-            "{}{}",
-            if self.search.is_some() { "/" } else { "" },
-            self.search.as_deref().unwrap_or("")
-        ))
-        .block(Block::default());
-
         let inner = area.inner(Margin {
             horizontal: 1,
             vertical: 1,
         });
 
-        let [title_row, list_body, footer_row, search_row] = Layout::vertical(vec![
+        let [title_row, list_body, footer_row] = Layout::vertical(vec![
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
-            Constraint::Length(1),
         ])
         .areas(inner);
-        // The location keeps its name and some of its path, and the hints get the rest
-        let location_width = name.chars().count() + path.chars().count().min(FOOTER_PATH_WIDTH);
-        let hints = self.footer_hints(usize::from(footer_row.width).saturating_sub(location_width));
-        let [location_area, hints_area] =
+        let (status, hints) = match self.search.as_deref() {
+            Some(query) => (self.search_status(query), self.search_hints()),
+            None => self.location_and_hints(footer_row.width.into()),
+        };
+        let [status_area, hints_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(hints.width() as u16)])
                 .areas(footer_row);
-        let path_width = usize::from(location_area.width).saturating_sub(name.chars().count());
-        let location = Line::from(vec![
-            Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(truncate_start(&path, path_width)),
-        ]);
 
         let footer_style = Style::default().add_modifier(Modifier::REVERSED);
         frame.render_widget(title_bar, title_row);
         frame.render_stateful_widget(list, list_body, &mut self.list_state);
-        frame.render_widget(Paragraph::new(location).style(footer_style), location_area);
+        frame.render_widget(Paragraph::new(status).style(footer_style), status_area);
         frame.render_widget(Paragraph::new(hints).style(footer_style), hints_area);
-        frame.render_widget(search_bar, search_row);
+        if self.search_is_capturing {
+            // After the " /" leading the query
+            let query_width = self.search.as_deref().unwrap_or_default().chars().count();
+            frame.set_cursor_position((status_area.x + 2 + query_width as u16, status_area.y));
+        }
 
         match &mut self.popup_state {
             PopupState::Closed => {}
@@ -809,6 +856,66 @@ impl Component for Home {
         }
         Ok(())
     }
+}
+
+fn hint_width((keys, label): &(String, &str)) -> usize {
+    keys.chars().count() + label.chars().count() + 3
+}
+
+/// Each hint's keys in bold, followed by its label
+fn hint_line(hints: &[(String, &str)]) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ")];
+    for (keys, label) in hints {
+        spans.push(Span::styled(
+            keys.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(format!(" {label}  ")));
+    }
+    Line::from(spans)
+}
+
+/// Splits text into spans in `style`, underlining each occurrence of `query`, which must already
+/// be lowercase, ignoring case
+fn highlight(text: &str, query: &str, style: Style) -> Vec<Span<'static>> {
+    if query.is_empty() {
+        return vec![Span::styled(text.to_string(), style)];
+    }
+    let mut spans = Vec::new();
+    let mut plain_start = 0;
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        match match_len(&text[i..], query) {
+            Some(len) => {
+                spans.push(Span::styled(text[plain_start..i].to_string(), style));
+                spans.push(Span::styled(
+                    text[i..i + len].to_string(),
+                    style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD),
+                ));
+                i += len;
+                plain_start = i;
+            }
+            None => i += c.len_utf8(),
+        }
+    }
+    spans.push(Span::styled(text[plain_start..].to_string(), style));
+    spans
+}
+
+/// The length in bytes of the start of `text` that lowercases to `query`, if it does
+fn match_len(text: &str, query: &str) -> Option<usize> {
+    let mut expected = query.chars().peekable();
+    for (index, c) in text.char_indices() {
+        for lower in c.to_lowercase() {
+            if expected.next() != Some(lower) {
+                return None;
+            }
+        }
+        if expected.peek().is_none() {
+            return Some(index + c.len_utf8());
+        }
+    }
+    None
 }
 
 /// Writes a path under the home directory relative to `~`
@@ -845,10 +952,14 @@ mod tests {
     use std::collections::HashMap;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Modifier, Style},
+    };
     use uuid::Uuid;
 
-    use super::{Home, ListEntry, abbreviate_home, truncate_start};
+    use super::{Home, ListEntry, abbreviate_home, highlight, truncate_start};
     use crate::{
         action::Action,
         components::{Component, popups::PopupState},
@@ -1473,7 +1584,7 @@ mod tests {
 
     /// The footer row of a render
     fn footer(home: &mut Home, width: u16) -> String {
-        render(home, width, 8)[5].clone()
+        render(home, width, 8)[6].clone()
     }
 
     #[test]
@@ -1535,6 +1646,88 @@ mod tests {
         assert_eq!(
             footer(&mut home, 60),
             "                   ␣p new project  ␣s new session  ? help"
+        );
+    }
+
+    #[test]
+    fn test_footer_shows_search_while_typing() {
+        let sessions = vec![named_session("alpha"), named_session("beta")];
+        let mut home = with_default_keymaps(home(Vec::new(), sessions, Vec::new()));
+        search(&mut home, "a");
+        assert_eq!(
+            footer(&mut home, 40),
+            "  /a  1/2          ⏎ done  esc cancel"
+        );
+        press(&mut home, KeyCode::Char('x'));
+        assert_eq!(
+            footer(&mut home, 40),
+            "  /ax  no matches  ⏎ done  esc cancel"
+        );
+    }
+
+    #[test]
+    fn test_footer_keeps_search_after_enter() {
+        let sessions = vec![named_session("alpha"), named_session("beta")];
+        let mut home = with_default_keymaps(home(Vec::new(), sessions, Vec::new()));
+        search(&mut home, "a");
+        press(&mut home, KeyCode::Enter);
+        home.update(Action::CmdSearchNext).unwrap();
+        assert_eq!(
+            footer(&mut home, 50),
+            "  /a  2/2         n next  N previous  esc clear"
+        );
+    }
+
+    #[test]
+    fn test_esc_clears_search_kept_after_enter() {
+        let sessions = vec![named_session("alpha"), named_session("beta")];
+        let mut home = home(Vec::new(), sessions, Vec::new());
+        search(&mut home, "a");
+        press(&mut home, KeyCode::Enter);
+        assert!(!home.search_is_capturing);
+        press(&mut home, KeyCode::Esc);
+        assert_eq!(home.search, None);
+        assert!(home.search_matches.is_empty());
+    }
+
+    #[test]
+    fn test_draw_underlines_search_matches() {
+        let mut home = home(Vec::new(), vec![named_session("myServer")], Vec::new());
+        search(&mut home, "ser");
+        let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+        terminal
+            .draw(|frame| home.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // The row reads "  ● myServer" from the left edge
+        let underlined: String = (0..20)
+            .filter(|&x| buffer[(x, 2)].modifier.contains(Modifier::UNDERLINED))
+            .map(|x| buffer[(x, 2)].symbol())
+            .collect();
+        assert_eq!(underlined, "Ser");
+    }
+
+    #[test]
+    fn test_highlight_marks_every_match_ignoring_case() {
+        let spans = highlight("abAB", "ab", Style::default());
+        let underlined: Vec<&str> = spans
+            .iter()
+            .filter(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(underlined, ["ab", "AB"]);
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "abAB");
+    }
+
+    #[test]
+    fn test_highlight_keeps_multibyte_text_intact() {
+        let spans = highlight("café-bar", "bar", Style::default());
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "café-bar");
+        assert!(
+            spans.iter().any(|span| span.content == "bar"
+                && span.style.add_modifier.contains(Modifier::UNDERLINED))
         );
     }
 
