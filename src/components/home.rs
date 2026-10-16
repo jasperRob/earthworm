@@ -22,9 +22,11 @@ use crate::{
     project::Project,
     session::Session,
     theme::SECONDARY,
+    tmux::get_tmux_session_path,
     worktree::Worktree,
 };
 use crossterm::event::{KeyCode, KeyEvent};
+use directories::BaseDirs;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
@@ -38,6 +40,8 @@ const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 const SPINNER_FRAME_MS: u128 = 80;
 const SESSION_GLYPH: char = '●';
 const WORKTREE_GLYPH: char = '○';
+/// How much of the selected row's path the footer keeps before leaving out action hints
+const FOOTER_PATH_WIDTH: usize = 24;
 
 #[derive(Clone)]
 enum ListEntry {
@@ -98,6 +102,7 @@ pub struct Home {
     session_history_index: usize,
     pending: HashMap<PendingTarget, Activity>,
     spinner_start: Instant,
+    home_dir: Option<String>,
 }
 
 impl Home {
@@ -119,6 +124,7 @@ impl Home {
             session_history_index: usize::default(),
             pending: HashMap::default(),
             spinner_start: Instant::now(),
+            home_dir: BaseDirs::new().map(|dirs| dirs.home_dir().to_string_lossy().into_owned()),
         }
     }
 
@@ -338,6 +344,120 @@ impl Home {
         };
         self.push_to_session_history(session.clone());
         Some(Action::AttachSession(session))
+    }
+
+    /// The actions that apply to the selected row, each with a label
+    fn footer_actions(&self) -> Vec<(Action, &'static str)> {
+        let Some(entry) = self.selected_entry() else {
+            return vec![
+                (Action::CmdAddProject, "new project"),
+                (Action::CmdAddSession, "new session"),
+                (Action::Help, "help"),
+            ];
+        };
+        if self.row_activity(entry).is_some() {
+            return vec![(Action::Help, "help")];
+        }
+        let mut actions = match entry {
+            ListEntry::Project(p) => vec![
+                (
+                    Action::CmdActivate,
+                    if self.collapsed.contains(&p.id) {
+                        "expand"
+                    } else {
+                        "collapse"
+                    },
+                ),
+                (Action::CmdAddSessionInProject, "new session"),
+                (Action::CmdEdit, "edit"),
+                (Action::CmdDeleteItem, "delete"),
+            ],
+            ListEntry::ProjectSession(_, _) => vec![
+                (Action::CmdActivate, "attach"),
+                (Action::CmdAddSessionInProject, "new session"),
+                (Action::CmdEdit, "edit"),
+                (Action::CmdDeleteItem, "delete"),
+            ],
+            ListEntry::AvailableWorktree(_, _) => vec![
+                (Action::CmdAddSession, "new session"),
+                (Action::CmdDeleteItem, "delete"),
+            ],
+            ListEntry::Session(_) => vec![
+                (Action::CmdActivate, "attach"),
+                (Action::CmdEdit, "edit"),
+                (Action::CmdDeleteItem, "delete"),
+            ],
+        };
+        actions.push((Action::Help, "help"));
+        actions
+    }
+
+    /// The shortest key sequence bound to an action, written compactly
+    fn key_hint(&self, action: &Action) -> Option<String> {
+        let action = action.to_string();
+        self.keymaps
+            .iter()
+            .filter(|(_, bound)| *bound == action)
+            .map(|(keys, _)| keys)
+            .min_by_key(|keys| (keys.len(), *keys))
+            .map(|keys| {
+                keys.split(' ')
+                    .map(|key| match key {
+                        "space" => "␣",
+                        "enter" => "⏎",
+                        key => key,
+                    })
+                    .collect()
+            })
+    }
+
+    /// Hints for the selected row's actions, leaving out those that don't fit in `width`, though
+    /// help is always kept
+    fn footer_hints(&self, width: usize) -> Line<'static> {
+        let hints: Vec<(String, &str)> = self
+            .footer_actions()
+            .into_iter()
+            .filter_map(|(action, label)| Some((self.key_hint(&action)?, label)))
+            .collect();
+        let hint_width = |(keys, label): &(String, &str)| keys.chars().count() + label.len() + 3;
+        // Help comes last, so reserve its room up front
+        let mut used = 1 + hints.last().map_or(0, hint_width);
+        let mut spans = vec![Span::raw(" ")];
+        for (i, hint) in hints.iter().enumerate() {
+            let is_help = i + 1 == hints.len();
+            if !is_help {
+                if used + hint_width(hint) > width {
+                    continue;
+                }
+                used += hint_width(hint);
+            }
+            let (keys, label) = hint;
+            spans.push(Span::styled(
+                keys.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(format!(" {label}  ")));
+        }
+        Line::from(spans)
+    }
+
+    /// The selected row's project and name, and its path
+    fn selected_location(&self) -> Option<(String, String)> {
+        let location = match self.selected_entry()? {
+            ListEntry::Project(p) => (p.name.clone(), p.path.clone()),
+            ListEntry::ProjectSession(p, s) => (
+                format!("{} › {}", p.name, s.name),
+                get_tmux_session_path(s, Some(p)).unwrap_or_default(),
+            ),
+            ListEntry::AvailableWorktree(p, wt) => {
+                (format!("{} › {}", p.name, wt.name), wt.path.clone())
+            }
+            ListEntry::Session(s) => (
+                s.name.clone(),
+                get_tmux_session_path(s, None).unwrap_or_default(),
+            ),
+        };
+        Some(location)
     }
 
     fn entry_line(&self, entry: &ListEntry, next: Option<&ListEntry>) -> Line<'static> {
@@ -623,9 +743,9 @@ impl Component for Home {
             .block(Block::default())
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-        let info_bar = Paragraph::new(" ?: help")
-            .block(Block::default())
-            .style(Style::default().add_modifier(Modifier::REVERSED));
+        let (name, path) = self.selected_location().unwrap_or_default();
+        let name = format!(" {name}  ");
+        let path = abbreviate_home(&path, self.home_dir.as_deref());
 
         let search_bar = Paragraph::new(format!(
             "{}{}",
@@ -639,18 +759,30 @@ impl Component for Home {
             vertical: 1,
         });
 
-        let [title_row, _, list_body, info_row, search_row] = Layout::vertical(vec![
-            Constraint::Length(1),
+        let [title_row, list_body, footer_row, search_row] = Layout::vertical(vec![
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
             Constraint::Length(1),
         ])
         .areas(inner);
+        // The location keeps its name and some of its path, and the hints get the rest
+        let location_width = name.chars().count() + path.chars().count().min(FOOTER_PATH_WIDTH);
+        let hints = self.footer_hints(usize::from(footer_row.width).saturating_sub(location_width));
+        let [location_area, hints_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(hints.width() as u16)])
+                .areas(footer_row);
+        let path_width = usize::from(location_area.width).saturating_sub(name.chars().count());
+        let location = Line::from(vec![
+            Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(truncate_start(&path, path_width)),
+        ]);
 
+        let footer_style = Style::default().add_modifier(Modifier::REVERSED);
         frame.render_widget(title_bar, title_row);
         frame.render_stateful_widget(list, list_body, &mut self.list_state);
-        frame.render_widget(info_bar, info_row);
+        frame.render_widget(Paragraph::new(location).style(footer_style), location_area);
+        frame.render_widget(Paragraph::new(hints).style(footer_style), hints_area);
         frame.render_widget(search_bar, search_row);
 
         match &mut self.popup_state {
@@ -679,6 +811,28 @@ impl Component for Home {
     }
 }
 
+/// Writes a path under the home directory relative to `~`
+fn abbreviate_home(path: &str, home_dir: Option<&str>) -> String {
+    match home_dir.and_then(|home| path.strip_prefix(home)) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
+}
+
+/// Shortens text to `width` characters by cutting from its start, as the end of a path is the
+/// most telling part
+fn truncate_start(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    if len <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let tail: String = text.chars().skip(len - (width - 1)).collect();
+    format!("…{tail}")
+}
+
 /// Dims a row and marks it with the activity running on it
 fn with_activity(line: Line<'_>, spinner: char, activity: Activity) -> Line<'_> {
     let mut line = line.patch_style(Modifier::DIM);
@@ -694,10 +848,11 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use uuid::Uuid;
 
-    use super::{Home, ListEntry};
+    use super::{Home, ListEntry, abbreviate_home, truncate_start};
     use crate::{
         action::Action,
         components::{Component, popups::PopupState},
+        config::Config,
         pending::{Activity, Pending, PendingTarget},
         project::Project,
         session::Session,
@@ -1299,7 +1454,7 @@ mod tests {
         home.list_state.select(Some(3));
         home.update(Action::CmdCollapse).unwrap();
         assert_eq!(
-            render(&mut home, 30, 11)[3..8],
+            render(&mut home, 30, 10)[2..7],
             [
                 "  ▾ api (2)",
                 "    ├ ● main",
@@ -1308,6 +1463,95 @@ mod tests {
                 "  ● scratch",
             ]
         );
+    }
+
+    fn with_default_keymaps(mut home: Home) -> Home {
+        let config: Config = json5::from_str(include_str!("../../.config/config.json5")).unwrap();
+        home.register_config_handler(config).unwrap();
+        home
+    }
+
+    /// The footer row of a render
+    fn footer(home: &mut Home, width: u16) -> String {
+        render(home, width, 8)[5].clone()
+    }
+
+    #[test]
+    fn test_footer_shows_selected_location_and_its_actions() {
+        let api = Project {
+            name: "api".to_string(),
+            path: "/repo/api".to_string(),
+            ..project()
+        };
+        let main = named_session_in("main", api.id);
+        let mut home = with_default_keymaps(home(vec![api], vec![main], Vec::new()));
+        home.list_state.select(Some(0));
+        assert_eq!(
+            footer(&mut home, 80),
+            "  api  /repo/api       ⏎ collapse  ␣c new session  ␣e edit  ␣d delete  ? help"
+        );
+        home.list_state.select(Some(1));
+        assert_eq!(
+            footer(&mut home, 80),
+            "  api › main  /repo/api  ⏎ attach  ␣c new session  ␣e edit  ␣d delete  ? help"
+        );
+    }
+
+    #[test]
+    fn test_footer_leaves_out_hints_that_do_not_fit_but_keeps_help() {
+        let api = Project {
+            name: "api".to_string(),
+            path: "/repo/api".to_string(),
+            ..project()
+        };
+        let main = named_session_in("main", api.id);
+        let mut home = with_default_keymaps(home(vec![api], vec![main], Vec::new()));
+        home.list_state.select(Some(1));
+        assert_eq!(
+            footer(&mut home, 50),
+            "  api › main  /repo/api        ⏎ attach  ? help"
+        );
+    }
+
+    #[test]
+    fn test_footer_on_busy_row_only_offers_help() {
+        let session = named_session("alpha");
+        let mut home = with_default_keymaps(home(
+            Vec::new(),
+            vec![session.clone()],
+            vec![Pending::new(
+                PendingTarget::Session(session.id),
+                Activity::Removing,
+            )],
+        ));
+        home.list_state.select(Some(0));
+        assert!(footer(&mut home, 60).ends_with(" ? help"));
+        assert!(!footer(&mut home, 60).contains("delete"));
+    }
+
+    #[test]
+    fn test_footer_on_empty_list_offers_creation() {
+        let mut home = with_default_keymaps(home(Vec::new(), Vec::new(), Vec::new()));
+        assert_eq!(
+            footer(&mut home, 60),
+            "                   ␣p new project  ␣s new session  ? help"
+        );
+    }
+
+    #[test]
+    fn test_abbreviate_home() {
+        let home = Some("/Users/me");
+        assert_eq!(abbreviate_home("/Users/me/src", home), "~/src");
+        assert_eq!(abbreviate_home("/Users/me", home), "~");
+        assert_eq!(abbreviate_home("/Users/meg/src", home), "/Users/meg/src");
+        assert_eq!(abbreviate_home("/Users/me/src", None), "/Users/me/src");
+    }
+
+    #[test]
+    fn test_truncate_start_keeps_end() {
+        assert_eq!(truncate_start("/a/b/c", 10), "/a/b/c");
+        assert_eq!(truncate_start("/a/b/c", 4), "…b/c");
+        assert_eq!(truncate_start("/a/b/c", 0), "");
     }
 
     #[test]
