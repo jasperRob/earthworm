@@ -75,9 +75,10 @@ pub struct Home {
     popup_state: PopupState,
     search_is_capturing: bool,
     search: Option<String>,
-    search_matches: Vec<usize>,
+    search_matches: Vec<PendingTarget>,
     search_cursor: usize,
     projects: HashMap<Uuid, Project>,
+    sessions: HashMap<Uuid, Session>,
     session_history: VecDeque<Session>,
     session_history_index: usize,
     pending: HashMap<PendingTarget, Activity>,
@@ -96,6 +97,7 @@ impl Home {
             search_matches: Vec::default(),
             search_cursor: usize::default(),
             projects: HashMap::default(),
+            sessions: HashMap::default(),
             session_history: VecDeque::new(),
             session_history_index: usize::default(),
             pending: HashMap::default(),
@@ -123,10 +125,18 @@ impl Home {
         self.pending.get(&entry.target()).or(related).copied()
     }
 
-    fn selected_is_pending(&self) -> bool {
+    fn selected_entry(&self) -> Option<&ListEntry> {
         self.list_state
             .selected()
             .and_then(|i| self.list_entries.get(i))
+    }
+
+    fn position_of(&self, target: &PendingTarget) -> Option<usize> {
+        self.list_entries.iter().position(|e| e.target() == *target)
+    }
+
+    fn selected_is_pending(&self) -> bool {
+        self.selected_entry()
             .is_some_and(|entry| self.row_activity(entry).is_some())
     }
 
@@ -135,7 +145,9 @@ impl Home {
         SPINNER_FRAMES[frame as usize % SPINNER_FRAMES.len()]
     }
 
-    fn rebuild_list(&mut self, projects: HashMap<Uuid, Project>, sessions: HashMap<Uuid, Session>) {
+    fn rebuild_list(&mut self) {
+        let selected = self.selected_entry().map(ListEntry::target);
+        let (projects, sessions) = (&self.projects, &self.sessions);
         let mut list_entries: Vec<ListEntry> = Vec::new();
 
         let mut sorted_projects: Vec<&Project> = projects.values().collect();
@@ -181,7 +193,7 @@ impl Home {
             .get(self.session_history_index)
             .map(|s| s.id);
         self.session_history
-            .retain(|s| sessions.contains_key(&s.id));
+            .retain(|s| self.sessions.contains_key(&s.id));
         self.session_history_index = current_id
             .and_then(|id| self.session_history.iter().position(|s| s.id == id))
             .unwrap_or_else(|| self.session_history.len().saturating_sub(1));
@@ -189,12 +201,16 @@ impl Home {
         if self.list_entries.is_empty() {
             self.list_state.select(None);
         } else {
-            let i = self.list_state.selected().unwrap_or(0);
+            // Keep the same entry selected, as rows above it may have been added or removed
+            let i = selected
+                .and_then(|target| self.position_of(&target))
+                .or(self.list_state.selected())
+                .unwrap_or(0);
             self.list_state
                 .select(Some(i.min(self.list_entries.len() - 1)));
         }
 
-        // Match indices point into the old list, so refresh them
+        // Entries may have been added or renamed, so refresh the matches
         if self.search.is_some() {
             self.recompute_search_matches();
         }
@@ -207,9 +223,8 @@ impl Home {
         } else {
             self.list_entries
                 .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.matches_search(&query))
-                .map(|(index, _)| index)
+                .filter(|entry| entry.matches_search(&query))
+                .map(ListEntry::target)
                 .collect()
         };
         self.search_cursor = self
@@ -219,8 +234,16 @@ impl Home {
 
     fn select_first_search_match(&mut self) {
         self.search_cursor = 0;
-        if let Some(&first_match) = self.search_matches.first() {
-            self.list_state.select(Some(first_match));
+        self.select_search_match();
+    }
+
+    fn select_search_match(&mut self) {
+        let index = self
+            .search_matches
+            .get(self.search_cursor)
+            .and_then(|target| self.position_of(target));
+        if index.is_some() {
+            self.list_state.select(index);
         }
     }
 
@@ -237,10 +260,7 @@ impl Home {
         let Some(move_to_session) = self.session_history.get(self.session_history_index) else {
             return;
         };
-        let list_state_index = self.list_entries.iter().position(|v| match v {
-            ListEntry::ProjectSession(_, s) | ListEntry::Session(s) => s.id == move_to_session.id,
-            ListEntry::Project(_) | ListEntry::AvailableWorktree(_, _) => false,
-        });
+        let list_state_index = self.position_of(&PendingTarget::Session(move_to_session.id));
         if list_state_index.is_some() {
             self.list_state.select(list_state_index);
         }
@@ -315,8 +335,9 @@ impl Component for Home {
                     .into_iter()
                     .map(|p| (p.target, p.activity))
                     .collect();
-                self.projects = projects.clone();
-                self.rebuild_list(projects, sessions);
+                self.projects = projects;
+                self.sessions = sessions;
+                self.rebuild_list();
             }
             Action::CmdSelectNext => self.list_state.select_next(),
             Action::CmdSelectPrev => self.list_state.select_previous(),
@@ -332,16 +353,14 @@ impl Component for Home {
             }
             Action::CmdSearchNext if !self.search_matches.is_empty() => {
                 self.search_cursor = (self.search_cursor + 1) % self.search_matches.len();
-                self.list_state
-                    .select(Some(self.search_matches[self.search_cursor]));
+                self.select_search_match();
             }
             Action::CmdSearchPrev if !self.search_matches.is_empty() => {
                 self.search_cursor = self
                     .search_cursor
                     .checked_sub(1)
                     .unwrap_or(self.search_matches.len() - 1);
-                self.list_state
-                    .select(Some(self.search_matches[self.search_cursor]));
+                self.select_search_match();
             }
             Action::CmdAddProject => self.popup_state = PopupState::Open(Box::new(new_project())),
             Action::CmdAddSessionInProject if !self.selected_is_pending() => {
@@ -767,6 +786,14 @@ mod tests {
         }
     }
 
+    /// Rows of the search matches, in match order
+    fn match_rows(home: &Home) -> Vec<usize> {
+        home.search_matches
+            .iter()
+            .filter_map(|target| home.position_of(target))
+            .collect()
+    }
+
     fn press(home: &mut Home, code: KeyCode) {
         home.handle_key_event(KeyEvent::new(code, KeyModifiers::empty()))
             .unwrap();
@@ -805,7 +832,7 @@ mod tests {
         ];
         let mut home = home(Vec::new(), sessions, Vec::new());
         search(&mut home, "ga");
-        assert_eq!(home.search_matches, vec![2]);
+        assert_eq!(match_rows(&home), vec![2]);
         assert_eq!(home.list_state.selected(), Some(2));
     }
 
@@ -814,10 +841,10 @@ mod tests {
         let sessions = vec![named_session("bar"), named_session("baz")];
         let mut home = home(Vec::new(), sessions, Vec::new());
         search(&mut home, "bar");
-        assert_eq!(home.search_matches, vec![0]);
+        assert_eq!(match_rows(&home), vec![0]);
         press(&mut home, KeyCode::Backspace);
         assert_eq!(home.search.as_deref(), Some("ba"));
-        assert_eq!(home.search_matches, vec![0, 1]);
+        assert_eq!(match_rows(&home), vec![0, 1]);
     }
 
     #[test]
@@ -825,7 +852,7 @@ mod tests {
         let sessions = vec![named_session("alpha"), named_session("myServer")];
         let mut home = home(Vec::new(), sessions, Vec::new());
         search(&mut home, "MYs");
-        assert_eq!(home.search_matches, vec![1]);
+        assert_eq!(match_rows(&home), vec![1]);
     }
 
     #[test]
@@ -837,10 +864,10 @@ mod tests {
         });
         let mut home = home(vec![project], Vec::new(), Vec::new());
         search(&mut home, "FEAT");
-        assert_eq!(home.search_matches, vec![1]);
+        assert_eq!(match_rows(&home), vec![1]);
         press(&mut home, KeyCode::Esc);
         search(&mut home, "checkout");
-        assert_eq!(home.search_matches, vec![1]);
+        assert_eq!(match_rows(&home), vec![1]);
     }
 
     #[test]
@@ -848,7 +875,7 @@ mod tests {
         let sessions = vec![named_session("alpha"), named_session("beta")];
         let mut home = home(Vec::new(), sessions, Vec::new());
         search(&mut home, "a");
-        assert_eq!(home.search_matches, vec![0, 1]);
+        assert_eq!(match_rows(&home), vec![0, 1]);
         press(&mut home, KeyCode::Esc);
         assert_eq!(home.search, None);
         assert!(home.search_matches.is_empty());
@@ -865,15 +892,24 @@ mod tests {
         let beta = named_session("beta");
         let mut home = home(Vec::new(), vec![alpha.clone(), beta.clone()], Vec::new());
         search(&mut home, "beta");
-        assert_eq!(home.search_matches, vec![1]);
+        assert_eq!(match_rows(&home), vec![1]);
 
-        // A new entry sorting first shifts every index
+        // A new entry sorting first shifts every row
         state_updated(
             &mut home,
             Vec::new(),
             vec![named_session("abeta"), alpha, beta],
         );
-        assert_eq!(home.search_matches, vec![0, 2]);
+        assert_eq!(match_rows(&home), vec![0, 2]);
+    }
+
+    #[test]
+    fn test_selection_follows_entry_when_rows_shift() {
+        let beta = named_session("beta");
+        let mut home = home(Vec::new(), vec![beta.clone()], Vec::new());
+        select_session(&mut home, beta.id);
+        state_updated(&mut home, Vec::new(), vec![named_session("alpha"), beta]);
+        assert_eq!(home.list_state.selected(), Some(1));
     }
 
     #[test]
