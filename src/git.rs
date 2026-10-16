@@ -1,3 +1,8 @@
+use std::process::{Command, Stdio};
+
+use color_eyre::eyre::eyre;
+use tracing::warn;
+
 use crate::worktree::Worktree;
 
 pub fn fetch_worktrees(repo_path: &str) -> color_eyre::Result<Vec<Worktree>> {
@@ -41,52 +46,123 @@ fn parse_worktree_porcelain(output: &str) -> Vec<Worktree> {
     worktrees
 }
 
+const REMOTE: &str = "origin";
+
+/// Creates a worktree for the branch, preferring the branch on origin, then a local branch, and
+/// otherwise creating a new branch from HEAD.
 pub fn create_worktree(
     repo_path: &str,
     worktree_name: &str,
     worktree_path: &str,
 ) -> color_eyre::Result<()> {
-    let branch_exists = std::process::Command::new("git")
-        .args(["-C", repo_path, "rev-parse", "--verify", worktree_name])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    let remote_ref = format!("refs/remotes/{REMOTE}/{worktree_name}");
+    let on_remote = fetch_remote_branch(repo_path, worktree_name, &remote_ref)?;
+    let local_exists = ref_exists(repo_path, &format!("refs/heads/{worktree_name}"))?;
+
+    let args: Vec<&str> = match (local_exists, on_remote) {
+        (true, _) => vec!["worktree", "add", worktree_path, worktree_name],
+        (false, true) => vec![
+            "worktree",
+            "add",
+            "--track",
+            "-b",
+            worktree_name,
+            worktree_path,
+            &remote_ref,
+        ],
+        (false, false) => vec!["worktree", "add", "-b", worktree_name, worktree_path],
+    };
+    run_git(repo_path, &args).map_err(|e| eyre!("Failed to add worktree: {e}"))?;
+
+    if local_exists && on_remote {
+        fast_forward(worktree_path, worktree_name, &remote_ref)?;
+    }
+    Ok(())
+}
+
+/// Fetches the branch from origin, returning whether origin has it. If origin is unreachable,
+/// the last fetched state of the branch is used instead.
+fn fetch_remote_branch(
+    repo_path: &str,
+    branch: &str,
+    remote_ref: &str,
+) -> color_eyre::Result<bool> {
+    if run_git(repo_path, &["remote", "get-url", REMOTE]).is_err() {
+        return Ok(false);
+    }
+    let output = git_command(repo_path)
+        .args([
+            "ls-remote",
+            "--exit-code",
+            "--heads",
+            REMOTE,
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()?;
+    match output.status.code() {
+        Some(0) => {
+            run_git(
+                repo_path,
+                &[
+                    "fetch",
+                    REMOTE,
+                    &format!("+refs/heads/{branch}:{remote_ref}"),
+                ],
+            )
+            .map_err(|e| eyre!("Failed to fetch {branch} from {REMOTE}: {e}"))?;
+            Ok(true)
+        }
+        // --exit-code reports a missing ref with 2
+        Some(2) => Ok(false),
+        _ => {
+            warn!(
+                "Could not reach {REMOTE}, using last fetched state of {branch}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            ref_exists(repo_path, remote_ref)
+        }
+    }
+}
+
+/// Fast-forwards the branch checked out in the worktree to the remote branch, leaving it as is if
+/// it has commits the remote branch doesn't.
+fn fast_forward(worktree_path: &str, branch: &str, remote_ref: &str) -> color_eyre::Result<()> {
+    let is_behind = git_command(worktree_path)
+        .args(["merge-base", "--is-ancestor", "HEAD", remote_ref])
         .status()?
         .success();
+    if !is_behind {
+        warn!("Local {branch} has commits not on {REMOTE}, so it was not updated");
+        return Ok(());
+    }
+    run_git(worktree_path, &["merge", "--ff-only", remote_ref])
+        .map_err(|e| eyre!("Failed to update {branch} from {REMOTE}: {e}"))?;
+    Ok(())
+}
 
-    let output = if branch_exists {
-        std::process::Command::new("git")
-            .args([
-                "-C",
-                repo_path,
-                "worktree",
-                "add",
-                worktree_path,
-                worktree_name,
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()?
-    } else {
-        std::process::Command::new("git")
-            .args([
-                "-C",
-                repo_path,
-                "worktree",
-                "add",
-                "-b",
-                worktree_name,
-                worktree_path,
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()?
-    };
+fn ref_exists(repo_path: &str, full_ref: &str) -> color_eyre::Result<bool> {
+    Ok(git_command(repo_path)
+        .args(["show-ref", "--verify", "--quiet", full_ref])
+        .status()?
+        .success())
+}
+
+/// A git command that never waits on a credential prompt, as the TUI owns the terminal
+fn git_command(dir: &str) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(["-C", dir])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// Runs git, returning its stderr as the error if it fails
+fn run_git(dir: &str, args: &[&str]) -> color_eyre::Result<()> {
+    let output = git_command(dir).args(args).output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(color_eyre::eyre::eyre!(
-            "Failed to add worktree: {}",
-            stderr.trim()
-        ));
+        return Err(eyre!("{}", String::from_utf8_lossy(&output.stderr).trim()));
     }
     Ok(())
 }
@@ -109,7 +185,7 @@ pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> color_eyre::Resu
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     use crate::git::{create_worktree, fetch_worktrees, parse_worktree_porcelain, remove_worktree};
@@ -254,6 +330,172 @@ branch refs/heads/feat
                 .unwrap()
                 .contains(&wt("existing", wt_path))
         );
+    }
+
+    /// Runs git in `dir`, returning trimmed stdout
+    fn git_in(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    fn commit(dir: &Path, message: &str) -> String {
+        git_in(dir, &["commit", "-q", "--allow-empty", "-m", message]);
+        git_in(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// A bare `origin`, a `seed` clone used to push to it, and a `repo` clone under test
+    fn init_with_origin() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (origin, seed, repo) = (
+            root.join("origin.git"),
+            root.join("seed"),
+            root.join("repo"),
+        );
+        git_in(&root, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+        git_in(&root, &["clone", "-q", origin.to_str().unwrap(), "seed"]);
+        commit(&seed, "init");
+        git_in(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        git_in(&root, &["clone", "-q", origin.to_str().unwrap(), "repo"]);
+        (dir, root, seed, repo)
+    }
+
+    fn upstream(dir: &Path) -> Option<String> {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    }
+
+    #[test]
+    fn test_create_worktree_tracks_branch_only_on_origin() {
+        let (_dir, root, seed, repo) = init_with_origin();
+        // Pushed after the clone, so it is only found by fetching
+        git_in(&seed, &["checkout", "-q", "-b", "feat"]);
+        let remote_head = commit(&seed, "feat work");
+        git_in(&seed, &["push", "-q", "origin", "feat"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), remote_head);
+        assert_eq!(upstream(&wt_path).as_deref(), Some("origin/feat"));
+    }
+
+    #[test]
+    fn test_create_worktree_fast_forwards_local_branch_behind_origin() {
+        let (_dir, root, seed, repo) = init_with_origin();
+        git_in(&seed, &["checkout", "-q", "-b", "feat"]);
+        commit(&seed, "first");
+        git_in(&seed, &["push", "-q", "origin", "feat"]);
+        git_in(&repo, &["fetch", "-q", "origin"]);
+        git_in(&repo, &["branch", "-q", "feat", "origin/feat"]);
+        let remote_head = commit(&seed, "second");
+        git_in(&seed, &["push", "-q", "origin", "feat"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), remote_head);
+    }
+
+    #[test]
+    fn test_create_worktree_keeps_local_commits_not_on_origin() {
+        let (_dir, root, seed, repo) = init_with_origin();
+        git_in(&seed, &["checkout", "-q", "-b", "feat"]);
+        commit(&seed, "remote work");
+        git_in(&seed, &["push", "-q", "origin", "feat"]);
+        git_in(&repo, &["checkout", "-q", "-b", "feat"]);
+        let local_head = commit(&repo, "local work");
+        git_in(&repo, &["checkout", "-q", "main"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), local_head);
+    }
+
+    #[test]
+    fn test_create_worktree_uses_local_branch_not_on_origin() {
+        let (_dir, root, _seed, repo) = init_with_origin();
+        git_in(&repo, &["checkout", "-q", "-b", "feat"]);
+        let local_head = commit(&repo, "local work");
+        git_in(&repo, &["checkout", "-q", "main"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), local_head);
+        assert_eq!(upstream(&wt_path), None);
+    }
+
+    #[test]
+    fn test_create_worktree_creates_missing_branch_from_head() {
+        let (_dir, root, _seed, repo) = init_with_origin();
+        let head = git_in(&repo, &["rev-parse", "HEAD"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git_in(&wt_path, &["branch", "--show-current"]), "feat");
+        assert_eq!(upstream(&wt_path), None);
+    }
+
+    #[test]
+    fn test_create_worktree_without_origin_creates_branch() {
+        let (_dir, root) = init_repo();
+        let (repo, wt_path) = (root.join("repo"), root.join("wt"));
+
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["branch", "--show-current"]), "feat");
+    }
+
+    #[test]
+    fn test_create_worktree_uses_last_fetched_branch_when_origin_unreachable() {
+        let (_dir, root, seed, repo) = init_with_origin();
+        git_in(&seed, &["checkout", "-q", "-b", "feat"]);
+        let remote_head = commit(&seed, "feat work");
+        git_in(&seed, &["push", "-q", "origin", "feat"]);
+        git_in(&repo, &["fetch", "-q", "origin"]);
+        let missing = root.join("missing.git");
+        git_in(
+            &repo,
+            &["remote", "set-url", "origin", missing.to_str().unwrap()],
+        );
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(git_in(&wt_path, &["rev-parse", "HEAD"]), remote_head);
+        assert_eq!(upstream(&wt_path).as_deref(), Some("origin/feat"));
+    }
+
+    #[test]
+    fn test_create_worktree_ignores_tag_with_branch_name() {
+        let (_dir, root, _seed, repo) = init_with_origin();
+        git_in(&repo, &["tag", "feat"]);
+
+        let wt_path = root.join("wt");
+        create_worktree(repo.to_str().unwrap(), "feat", wt_path.to_str().unwrap()).unwrap();
+
+        // A tag is not a branch, so a branch is created rather than a detached worktree
+        assert_eq!(git_in(&wt_path, &["branch", "--show-current"]), "feat");
     }
 
     #[test]
