@@ -182,7 +182,13 @@ impl Home {
                 .values()
                 .filter(|s| s.project_id == Some(project.id))
                 .collect();
-            project_sessions.sort_by(|a, b| a.name.cmp(&b.name));
+            // The session in the project's own checkout comes first
+            let is_base = |s: &Session| {
+                get_tmux_session_path(s, Some(project)).is_ok_and(|path| {
+                    path.trim_end_matches('/') == project.path.trim_end_matches('/')
+                })
+            };
+            project_sessions.sort_by(|a, b| (!is_base(a), &a.name).cmp(&(!is_base(b), &b.name)));
             for session in project_sessions {
                 tree.push(ListEntry::ProjectSession(project.clone(), session.clone()));
             }
@@ -1046,6 +1052,74 @@ mod tests {
                 ListEntry::ProjectSession(_, first),
                 ListEntry::ProjectSession(_, second),
             ] if p.id == project.id && first.id == a.id && second.id == b.id
+        ));
+    }
+
+    #[test]
+    fn test_base_session_is_listed_first() {
+        let project = Project {
+            path: "/src/repo/".to_string(),
+            ..project()
+        };
+        let other = Session {
+            name: "a".to_string(),
+            path: Some("/src/repo-a".to_string()),
+            ..session(Some(project.id))
+        };
+        let base = Session {
+            name: "z".to_string(),
+            path: Some("/src/repo".to_string()),
+            ..session(Some(project.id))
+        };
+        let home = home(
+            vec![project.clone()],
+            vec![other.clone(), base.clone()],
+            Vec::new(),
+        );
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [
+                ListEntry::Project(_),
+                ListEntry::ProjectSession(_, first),
+                ListEntry::ProjectSession(_, second),
+            ] if first.id == base.id && second.id == other.id
+        ));
+    }
+
+    #[test]
+    fn test_base_worktree_session_is_listed_first() {
+        let project = Project {
+            path: "/src/repo".to_string(),
+            ..project()
+        };
+        let other = Session {
+            name: "a".to_string(),
+            worktree: Some(Worktree {
+                name: "feat".to_string(),
+                path: "/src/repo-feat".to_string(),
+            }),
+            ..session(Some(project.id))
+        };
+        let base = Session {
+            name: "z".to_string(),
+            worktree: Some(Worktree {
+                name: "main".to_string(),
+                path: "/src/repo".to_string(),
+            }),
+            ..session(Some(project.id))
+        };
+        let home = home(
+            vec![project.clone()],
+            vec![other.clone(), base.clone()],
+            Vec::new(),
+        );
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [
+                ListEntry::Project(_),
+                ListEntry::ProjectSession(_, first),
+                ListEntry::ProjectSession(_, second),
+            ] if first.id == base.id && second.id == other.id
         ));
     }
 
