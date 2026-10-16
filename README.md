@@ -55,6 +55,10 @@ earthworm
 | `Space a` | Attach to selected session |
 | `Space e` | Edit selected item         |
 | `Space d` | Delete selected item       |
+| `Enter`   | Attach to session, or collapse/expand project |
+| `h`       | Collapse project           |
+| `l`       | Expand project             |
+| `za`      | Toggle project collapsed   |
 | `Tab`     | Next session in history    |
 | `Ctrl-i`  | Next session in history    |
 | `Ctrl-o`  | Previous session in history |
@@ -70,8 +74,8 @@ a path to the repo.
 
 **Sessions** are tmux sessions linked to a project. When you create a session
 with a worktree name, earthworm creates the git worktree and the tmux session in
-one step. Sessions linked to a project are shown indented beneath it in the
-list.
+one step. Sessions linked to a project are shown beneath it in the list, and
+a project can be collapsed to hide them.
 
 **Worktrees** — when you add a project, earthworm scans the repo for existing
 git worktrees and lists them automatically.

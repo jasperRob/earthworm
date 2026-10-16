@@ -36,7 +36,10 @@ use uuid::Uuid;
 
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_FRAME_MS: u128 = 80;
+const SESSION_GLYPH: char = '●';
+const WORKTREE_GLYPH: char = '○';
 
+#[derive(Clone)]
 enum ListEntry {
     Project(Project),
     ProjectSession(Project, Session),
@@ -56,6 +59,14 @@ impl ListEntry {
         }
     }
 
+    /// The project a session or worktree row is listed under
+    fn parent_id(&self) -> Option<Uuid> {
+        match self {
+            ListEntry::ProjectSession(p, _) | ListEntry::AvailableWorktree(p, _) => Some(p.id),
+            ListEntry::Project(_) | ListEntry::Session(_) => None,
+        }
+    }
+
     /// Whether the entry's name (or worktree path) contains `query`, which
     /// must already be lowercase
     fn matches_search(&self, query: &str) -> bool {
@@ -70,7 +81,11 @@ impl ListEntry {
 
 pub struct Home {
     keymaps: Vec<(String, String)>,
+    /// Every entry, including those of collapsed projects
+    tree: Vec<ListEntry>,
+    /// The entries shown, which the list state indexes into
     list_entries: Vec<ListEntry>,
+    collapsed: HashSet<Uuid>,
     list_state: ListState,
     popup_state: PopupState,
     search_is_capturing: bool,
@@ -89,7 +104,9 @@ impl Home {
     pub fn new() -> Self {
         Self {
             keymaps: Vec::default(),
+            tree: Vec::default(),
             list_entries: Vec::default(),
+            collapsed: HashSet::default(),
             list_state: ListState::default(),
             popup_state: PopupState::Closed,
             search_is_capturing: false,
@@ -148,20 +165,20 @@ impl Home {
     fn rebuild_list(&mut self) {
         let selected = self.selected_entry().map(ListEntry::target);
         let (projects, sessions) = (&self.projects, &self.sessions);
-        let mut list_entries: Vec<ListEntry> = Vec::new();
+        let mut tree: Vec<ListEntry> = Vec::new();
 
         let mut sorted_projects: Vec<&Project> = projects.values().collect();
         sorted_projects.sort_by(|a, b| a.name.cmp(&b.name));
 
         for project in sorted_projects {
-            list_entries.push(ListEntry::Project(project.clone()));
+            tree.push(ListEntry::Project(project.clone()));
             let mut project_sessions: Vec<&Session> = sessions
                 .values()
                 .filter(|s| s.project_id == Some(project.id))
                 .collect();
             project_sessions.sort_by(|a, b| a.name.cmp(&b.name));
             for session in project_sessions {
-                list_entries.push(ListEntry::ProjectSession(project.clone(), session.clone()));
+                tree.push(ListEntry::ProjectSession(project.clone(), session.clone()));
             }
             // Find all paths which are currently used by sessions
             let active_paths: HashSet<&str> = sessions
@@ -172,7 +189,7 @@ impl Home {
             // Only add worktree if path does not match that of a current session
             for worktree in &project.worktrees {
                 if !active_paths.contains(worktree.path.as_str()) {
-                    list_entries.push(ListEntry::AvailableWorktree(
+                    tree.push(ListEntry::AvailableWorktree(
                         project.clone(),
                         worktree.clone(),
                     ));
@@ -185,8 +202,17 @@ impl Home {
             .filter(|s| s.project_id.is_none())
             .collect();
         orphaned.sort_by(|a, b| a.name.cmp(&b.name));
-        list_entries.extend(orphaned.into_iter().map(|s| ListEntry::Session(s.clone())));
-        self.list_entries = list_entries;
+        tree.extend(orphaned.into_iter().map(|s| ListEntry::Session(s.clone())));
+        self.list_entries = tree
+            .iter()
+            .filter(|entry| {
+                entry
+                    .parent_id()
+                    .is_none_or(|id| !self.collapsed.contains(&id))
+            })
+            .cloned()
+            .collect();
+        self.tree = tree;
 
         let current_id = self
             .session_history
@@ -221,7 +247,7 @@ impl Home {
         self.search_matches = if query.is_empty() {
             Vec::new()
         } else {
-            self.list_entries
+            self.tree
                 .iter()
                 .filter(|entry| entry.matches_search(&query))
                 .map(ListEntry::target)
@@ -238,12 +264,122 @@ impl Home {
     }
 
     fn select_search_match(&mut self) {
-        let index = self
-            .search_matches
-            .get(self.search_cursor)
-            .and_then(|target| self.position_of(target));
+        if let Some(target) = self.search_matches.get(self.search_cursor).cloned() {
+            self.select_revealing(&target);
+        }
+    }
+
+    /// Selects an entry, first expanding its project if collapsed, like opening a fold
+    fn select_revealing(&mut self, target: &PendingTarget) {
+        if self.position_of(target).is_none()
+            && let Some(project_id) = self
+                .tree
+                .iter()
+                .find(|entry| entry.target() == *target)
+                .and_then(ListEntry::parent_id)
+        {
+            self.collapsed.remove(&project_id);
+            self.rebuild_list();
+        }
+        let index = self.position_of(target);
         if index.is_some() {
             self.list_state.select(index);
+        }
+    }
+
+    /// The selected project, or the project the selected row is listed under
+    fn selected_project_id(&self) -> Option<Uuid> {
+        match self.selected_entry()? {
+            ListEntry::Project(p) => Some(p.id),
+            entry => entry.parent_id(),
+        }
+    }
+
+    /// Collapses the selected project, or the one the selected row is listed under, moving the
+    /// selection onto it
+    fn collapse_selected(&mut self) {
+        let Some(project_id) = self.selected_project_id() else {
+            return;
+        };
+        self.collapsed.insert(project_id);
+        self.list_state
+            .select(self.position_of(&PendingTarget::Project(project_id)));
+        self.rebuild_list();
+    }
+
+    fn expand_selected(&mut self) {
+        if let Some(ListEntry::Project(p)) = self.selected_entry() {
+            let project_id = p.id;
+            self.collapsed.remove(&project_id);
+            self.rebuild_list();
+        }
+    }
+
+    fn toggle_selected(&mut self) {
+        let is_collapsed_project = matches!(
+            self.selected_entry(),
+            Some(ListEntry::Project(p)) if self.collapsed.contains(&p.id)
+        );
+        if is_collapsed_project {
+            self.expand_selected();
+        } else {
+            self.collapse_selected();
+        }
+    }
+
+    /// Attaches to the selected session, recording it in the session history
+    fn attach_selected(&mut self) -> Option<Action> {
+        if self.selected_is_pending() {
+            return None;
+        }
+        let session = match self.selected_entry()? {
+            ListEntry::ProjectSession(_, s) | ListEntry::Session(s) => s.clone(),
+            ListEntry::Project(_) | ListEntry::AvailableWorktree(_, _) => return None,
+        };
+        self.push_to_session_history(session.clone());
+        Some(Action::AttachSession(session))
+    }
+
+    fn entry_line(&self, entry: &ListEntry, next: Option<&ListEntry>) -> Line<'static> {
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        let branch = |project_id: Uuid| {
+            // The last row under a project closes off the tree
+            let glyph = if next.and_then(ListEntry::parent_id) == Some(project_id) {
+                '├'
+            } else {
+                '└'
+            };
+            Span::styled(format!("   {glyph} "), dim)
+        };
+        match entry {
+            ListEntry::Project(p) => {
+                let marker = if self.collapsed.contains(&p.id) {
+                    '▸'
+                } else {
+                    '▾'
+                };
+                let count = self
+                    .tree
+                    .iter()
+                    .filter(|e| e.parent_id() == Some(p.id))
+                    .count();
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {marker} {}", p.name),
+                        Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
+                    ),
+                    Span::styled(format!(" ({count})"), dim),
+                ])
+            }
+            ListEntry::ProjectSession(p, s) => Line::from(vec![
+                branch(p.id),
+                Span::raw(format!("{SESSION_GLYPH} {}", s.name)),
+            ]),
+            ListEntry::AvailableWorktree(p, wt) => Line::from(vec![
+                branch(p.id),
+                Span::styled(format!("{WORKTREE_GLYPH} {}", wt.name), dim),
+            ]),
+            ListEntry::Session(s) => Line::from(format!(" {SESSION_GLYPH} {}", s.name)),
         }
     }
 
@@ -257,12 +393,8 @@ impl Home {
     }
 
     fn select_session_history(&mut self) {
-        let Some(move_to_session) = self.session_history.get(self.session_history_index) else {
-            return;
-        };
-        let list_state_index = self.position_of(&PendingTarget::Session(move_to_session.id));
-        if list_state_index.is_some() {
-            self.list_state.select(list_state_index);
+        if let Some(session) = self.session_history.get(self.session_history_index) {
+            self.select_revealing(&PendingTarget::Session(session.id));
         }
     }
 }
@@ -434,27 +566,17 @@ impl Component for Home {
                     }
                 }
             }
-            Action::CmdAttach if !self.selected_is_pending() => {
-                let mut session: Option<Session> = None;
-                if let Some(i) = self.list_state.selected()
-                    && let Some(entry) = self.list_entries.get(i)
-                {
-                    match entry {
-                        ListEntry::Project(_) => {}
-                        ListEntry::ProjectSession(_, s) => {
-                            session = Some(s.clone());
-                        }
-                        ListEntry::Session(s) => {
-                            session = Some(s.clone());
-                        }
-                        ListEntry::AvailableWorktree(_, _) => {}
-                    }
+            Action::CmdAttach => return Ok(self.attach_selected()),
+            Action::CmdActivate => match self.selected_entry() {
+                Some(ListEntry::Project(_)) => self.toggle_selected(),
+                Some(ListEntry::ProjectSession(_, _) | ListEntry::Session(_)) => {
+                    return Ok(self.attach_selected());
                 }
-                if let Some(s) = session {
-                    self.push_to_session_history(s.clone());
-                    return Ok(Some(Action::AttachSession(s)));
-                }
-            }
+                Some(ListEntry::AvailableWorktree(_, _)) | None => {}
+            },
+            Action::CmdCollapse => self.collapse_selected(),
+            Action::CmdExpand => self.expand_selected(),
+            Action::CmdToggleCollapse => self.toggle_selected(),
             Action::CmdNextSessionHistory => {
                 if self.session_history_index + 1 < self.session_history.len() {
                     self.session_history_index += 1;
@@ -487,22 +609,9 @@ impl Component for Home {
         let items: Vec<ListItem> = self
             .list_entries
             .iter()
-            .map(|entry| {
-                let line = match entry {
-                    ListEntry::Project(p) => Line::from(Span::styled(
-                        format!(" - {}", p.name.clone()),
-                        Style::default().add_modifier(Modifier::BOLD).fg(SECONDARY),
-                    )),
-                    ListEntry::ProjectSession(_, s) => {
-                        Line::from(Span::raw(format!("     {}", s.name.clone(),)))
-                    }
-                    ListEntry::AvailableWorktree(_, worktree) => Line::from(format!(
-                        "     [worktree] ({}) {}",
-                        worktree.name.clone(),
-                        worktree.path.clone()
-                    )),
-                    ListEntry::Session(s) => Line::from(format!(" {}", s.name.clone())),
-                };
+            .enumerate()
+            .map(|(i, entry)| {
+                let line = self.entry_line(entry, self.list_entries.get(i + 1));
                 match self.row_activity(entry) {
                     Some(activity) => ListItem::new(with_activity(line, spinner, activity)),
                     None => ListItem::new(line),
@@ -582,6 +691,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend};
     use uuid::Uuid;
 
     use super::{Home, ListEntry};
@@ -999,6 +1109,205 @@ mod tests {
                 ListEntry::AvailableWorktree(_, wt),
             ] if s.id == session.id && *wt == free
         ));
+    }
+
+    /// A project with a session, and a second project after it
+    fn two_projects() -> (Project, Session, Project) {
+        let first = Project {
+            name: "first".to_string(),
+            ..project()
+        };
+        let second = Project {
+            name: "second".to_string(),
+            ..project()
+        };
+        let session = named_session_in("feature", first.id);
+        (first, session, second)
+    }
+
+    fn named_session_in(name: &str, project_id: Uuid) -> Session {
+        Session {
+            name: name.to_string(),
+            ..session(Some(project_id))
+        }
+    }
+
+    #[test]
+    fn test_collapse_hides_project_rows_and_selects_project() {
+        let (first, session, second) = two_projects();
+        let mut home = home(
+            vec![first.clone(), second.clone()],
+            vec![session.clone()],
+            Vec::new(),
+        );
+        select_session(&mut home, session.id);
+        home.update(Action::CmdCollapse).unwrap();
+        assert!(matches!(
+            home.list_entries.as_slice(),
+            [ListEntry::Project(a), ListEntry::Project(b)] if a.id == first.id && b.id == second.id
+        ));
+        assert_eq!(home.list_state.selected(), Some(0));
+
+        home.update(Action::CmdExpand).unwrap();
+        assert_eq!(home.list_entries.len(), 3);
+        assert_eq!(home.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_project_stays_collapsed_across_state_updates() {
+        let (first, session, second) = two_projects();
+        let mut home = home(
+            vec![first.clone(), second.clone()],
+            vec![session.clone()],
+            Vec::new(),
+        );
+        home.list_state.select(Some(0));
+        home.update(Action::CmdToggleCollapse).unwrap();
+        state_updated(&mut home, vec![first, second], vec![session]);
+        assert_eq!(home.list_entries.len(), 2);
+    }
+
+    #[test]
+    fn test_toggle_on_session_collapses_its_project() {
+        let (first, session, second) = two_projects();
+        let mut home = home(vec![first, second], vec![session.clone()], Vec::new());
+        select_session(&mut home, session.id);
+        home.update(Action::CmdToggleCollapse).unwrap();
+        assert_eq!(home.list_entries.len(), 2);
+        home.update(Action::CmdToggleCollapse).unwrap();
+        assert_eq!(home.list_entries.len(), 3);
+    }
+
+    #[test]
+    fn test_collapse_ignores_session_without_project() {
+        let session = session(None);
+        let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
+        select_session(&mut home, session.id);
+        home.update(Action::CmdCollapse).unwrap();
+        assert!(home.collapsed.is_empty());
+        assert_eq!(home.list_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_search_expands_collapsed_project_of_match() {
+        let (first, session, second) = two_projects();
+        let mut home = home(
+            vec![first.clone(), second],
+            vec![session.clone()],
+            Vec::new(),
+        );
+        home.list_state.select(Some(0));
+        home.update(Action::CmdCollapse).unwrap();
+        search(&mut home, "feat");
+        assert!(!home.collapsed.contains(&first.id));
+        assert_eq!(home.list_state.selected(), Some(1));
+        assert_eq!(match_rows(&home), vec![1]);
+    }
+
+    #[test]
+    fn test_session_history_expands_collapsed_project() {
+        let (first, session, second) = two_projects();
+        let mut home = home(
+            vec![first.clone(), second],
+            vec![session.clone()],
+            Vec::new(),
+        );
+        select_session(&mut home, session.id);
+        home.update(Action::CmdAttach).unwrap();
+        home.update(Action::CmdCollapse).unwrap();
+        home.update(Action::CmdPrevSessionHistory).unwrap();
+        assert!(!home.collapsed.contains(&first.id));
+        assert_eq!(home.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_activate_toggles_project() {
+        let (first, session, second) = two_projects();
+        let mut home = home(vec![first, second], vec![session], Vec::new());
+        home.list_state.select(Some(0));
+        assert_eq!(home.update(Action::CmdActivate).unwrap(), None);
+        assert_eq!(home.list_entries.len(), 2);
+        home.update(Action::CmdActivate).unwrap();
+        assert_eq!(home.list_entries.len(), 3);
+    }
+
+    #[test]
+    fn test_activate_attaches_session() {
+        let session = session(None);
+        let mut home = home(Vec::new(), vec![session.clone()], Vec::new());
+        select_session(&mut home, session.id);
+        assert_eq!(
+            home.update(Action::CmdActivate).unwrap(),
+            Some(Action::AttachSession(session.clone()))
+        );
+        assert_eq!(home.session_history, [session]);
+    }
+
+    #[test]
+    fn test_activate_does_nothing_on_worktree() {
+        let mut project = project();
+        project.worktrees.push(Worktree {
+            name: "free".to_string(),
+            path: "/tmp/free".to_string(),
+        });
+        let mut home = home(vec![project], Vec::new(), Vec::new());
+        home.list_state.select(Some(1));
+        assert_eq!(home.update(Action::CmdActivate).unwrap(), None);
+        assert!(matches!(home.popup_state, PopupState::Closed));
+        assert_eq!(home.list_entries.len(), 2);
+    }
+
+    /// The rendered rows of the list, without trailing spaces
+    fn render(home: &mut Home, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| home.draw(frame, frame.area()).unwrap())
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_draw_shows_projects_as_tree() {
+        let mut api = Project {
+            name: "api".to_string(),
+            ..project()
+        };
+        api.worktrees.push(Worktree {
+            name: "fix-bug".to_string(),
+            path: "/tmp/fix-bug".to_string(),
+        });
+        let web = Project {
+            name: "web".to_string(),
+            ..project()
+        };
+        let main = named_session_in("main", api.id);
+        let dev = named_session_in("dev", web.id);
+        let mut home = home(
+            vec![api, web.clone()],
+            vec![main, dev, named_session("scratch")],
+            Vec::new(),
+        );
+        home.list_state.select(Some(3));
+        home.update(Action::CmdCollapse).unwrap();
+        assert_eq!(
+            render(&mut home, 30, 11)[3..8],
+            [
+                "  ▾ api (2)",
+                "    ├ ● main",
+                "    └ ○ fix-bug",
+                "  ▸ web (1)",
+                "  ● scratch",
+            ]
+        );
     }
 
     #[test]
