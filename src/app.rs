@@ -24,8 +24,9 @@ mod handlers;
 mod jobs;
 mod keys;
 
-/// How often tmux is re-synced, to pick up sessions created or killed outside the app
-const TMUX_SYNC_INTERVAL_SECS: f64 = 5.0;
+/// How often tmux is re-synced, to pick up sessions created or killed outside the app. Kept long
+/// as each sync briefly shows a loading indicator, and returning from an attach also syncs.
+const TMUX_SYNC_INTERVAL_SECS: f64 = 30.0;
 
 pub struct App {
     config: Config,
@@ -160,7 +161,7 @@ impl App {
                 Action::Tick => {
                     // self.key_sequence = KeySequence::default();
                     self.ticks_since_sync += 1;
-                    if self.ticks_since_sync >= self.sync_interval_ticks() {
+                    if self.ticks_since_sync >= sync_interval_ticks(self.tick_rate) {
                         self.start_tmux_sync()
                     } else {
                         Ok(())
@@ -272,11 +273,6 @@ impl App {
         }
     }
 
-    /// Number of ticks between periodic tmux syncs
-    fn sync_interval_ticks(&self) -> u64 {
-        (TMUX_SYNC_INTERVAL_SECS * self.tick_rate).round().max(1.0) as u64
-    }
-
     fn handle_resize(&mut self, tui: &mut Tui, w: u16, h: u16) -> color_eyre::Result<()> {
         tui.resize(Rect::new(0, 0, w, h))?;
         self.render(tui)?;
@@ -352,5 +348,25 @@ impl App {
 
     fn dispatch_error(&self, e: impl std::fmt::Display) {
         let _ = self.action_tx.send(Action::Error(e.to_string()));
+    }
+}
+
+/// Number of ticks between periodic tmux syncs
+fn sync_interval_ticks(tick_rate: f64) -> u64 {
+    (TMUX_SYNC_INTERVAL_SECS * tick_rate).round().max(1.0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_interval_ticks;
+
+    #[test]
+    fn test_sync_interval_is_thirty_seconds_at_default_tick_rate() {
+        assert_eq!(sync_interval_ticks(4.0), 120);
+    }
+
+    #[test]
+    fn test_sync_interval_is_at_least_one_tick() {
+        assert_eq!(sync_interval_ticks(0.0), 1);
     }
 }
