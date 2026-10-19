@@ -15,12 +15,6 @@ from a single list in your terminal.
 
 ## Why earthworm?
 
-Tools like [tmuxinator](https://github.com/tmuxinator/tmuxinator),
-[sesh](https://github.com/joshmedeski/sesh) and
-[tmux-sessionizer](https://github.com/ThePrimeagen/.dotfiles) are great for
-opening tmux sessions from directories or layouts. earthworm is built around git
-worktrees instead:
-
 - Start work on a branch with one keypress, which creates both the worktree and
   its tmux session
 - See every repo, its sessions, and its worktrees without a session, in one tree
@@ -56,8 +50,8 @@ cargo install --path .
 3. With the project selected, press `Space c` and enter a branch name. earthworm
    creates a worktree for the branch and a tmux session in it.
 4. Press `Enter` on the session to attach to it.
-5. Press `Tab` or `Ctrl-o` to move forwards and back through the sessions
-   you've visited.
+5. Press `Tab` or `Ctrl-o` to move forwards and back through the sessions you've
+   visited.
 
 Press `?` at any time to see every keybinding.
 
@@ -105,43 +99,43 @@ worktree has changes or untracked files.
 
 **Navigation**
 
-| Key           | Action                                        |
-| ------------- | --------------------------------------------- |
-| `j` / `k`     | Move down / up                                |
-| `gg` / `G`    | Jump to top / bottom                          |
-| `Enter`       | Attach to session, or collapse/expand project |
-| `h` / `l`     | Collapse / expand project                     |
-| `za`          | Toggle project collapsed                      |
+| Key        | Action                                        |
+| ---------- | --------------------------------------------- |
+| `j` / `k`  | Move down / up                                |
+| `gg` / `G` | Jump to top / bottom                          |
+| `Enter`    | Attach to session, or collapse/expand project |
+| `h` / `l`  | Collapse / expand project                     |
+| `za`       | Toggle project collapsed                      |
 
 **Projects and sessions**
 
-| Key       | Action                                                    |
-| --------- | --------------------------------------------------------- |
-| `Space p` | New project                                               |
-| `Space c` | New session and worktree in the selected project          |
-| `Space s` | New session, or a session in the selected worktree        |
-| `Space a` | Attach to selected session                                |
-| `Space e` | Edit selected item                                        |
-| `Space d` | Delete selected item                                      |
+| Key       | Action                                             |
+| --------- | -------------------------------------------------- |
+| `Space p` | New project                                        |
+| `Space c` | New session and worktree in the selected project   |
+| `Space s` | New session, or a session in the selected worktree |
+| `Space a` | Attach to selected session                         |
+| `Space e` | Edit selected item                                 |
+| `Space d` | Delete selected item                               |
 
 **Search**
 
-| Key       | Action                               |
-| --------- | ------------------------------------ |
-| `/`       | Start search                         |
-| `Enter`   | Keep the search and return to list   |
-| `n` / `N` | Next / previous match                |
-| `Esc`     | Clear search                         |
+| Key       | Action                             |
+| --------- | ---------------------------------- |
+| `/`       | Start search                       |
+| `Enter`   | Keep the search and return to list |
+| `n` / `N` | Next / previous match              |
+| `Esc`     | Clear search                       |
 
 **History and app**
 
-| Key                | Action                        |
-| ------------------ | ----------------------------- |
-| `Tab` / `Ctrl-i`   | Next session in history       |
-| `Ctrl-o`           | Previous session in history   |
-| `?`                | Show help                     |
-| `q` / `Ctrl-c`     | Quit                          |
-| `Ctrl-z`           | Suspend                       |
+| Key              | Action                      |
+| ---------------- | --------------------------- |
+| `Tab` / `Ctrl-i` | Next session in history     |
+| `Ctrl-o`         | Previous session in history |
+| `?`              | Show help                   |
+| `q` / `Ctrl-c`   | Quit                        |
+| `Ctrl-z`         | Suspend                     |
 
 ## Configuration
 
@@ -163,10 +157,10 @@ See [`.config/config.json5`](.config/config.json5) for the defaults and the
 names of every action. `config.json`, `config.yaml`, `config.toml` and
 `config.ini` are also read.
 
-| OS    | Config directory                                     | Data directory                                       |
-| ----- | ---------------------------------------------------- | ---------------------------------------------------- |
-| macOS | `~/Library/Application Support/com.kdheepak.earthworm` | `~/Library/Application Support/com.kdheepak.earthworm` |
-| Linux | `$XDG_CONFIG_HOME/earthworm` (`~/.config/earthworm`) | `$XDG_DATA_HOME/earthworm` (`~/.local/share/earthworm`) |
+| OS    | Config directory                                       | Data directory                                          |
+| ----- | ------------------------------------------------------ | ------------------------------------------------------- |
+| macOS | `~/Library/Application Support/com.kdheepak.earthworm` | `~/Library/Application Support/com.kdheepak.earthworm`  |
+| Linux | `$XDG_CONFIG_HOME/earthworm` (`~/.config/earthworm`)   | `$XDG_DATA_HOME/earthworm` (`~/.local/share/earthworm`) |
 
 Set `EARTHWORM_CONFIG` or `EARTHWORM_DATA` to use other directories.
 `earthworm --version` prints the directories in use.
