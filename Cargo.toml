@@ -2,7 +2,7 @@
 name = "earthworm"
 version = "0.1.0"
 edition = "2024"
-description = "Tmux Project Manager"
+description = "A terminal UI for managing tmux sessions around git worktrees"
 authors = ["Jasper Robison <jasper.robison22@gmail.com>"]
 build = "build.rs"
 
