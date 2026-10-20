@@ -30,6 +30,51 @@ fn exact_target(tmux_session_name: &str) -> String {
     format!("={tmux_session_name}")
 }
 
+// A pane target needs the trailing `:`, as `=name` alone is not a valid pane.
+fn exact_pane_target(tmux_session_name: &str) -> String {
+    format!("{}:", exact_target(tmux_session_name))
+}
+
+fn new_session_args(
+    tmux_session_name: &str,
+    tmux_session_path: &str,
+    env: &[(String, String)],
+) -> Vec<String> {
+    let mut args = vec![
+        String::from("new-session"),
+        String::from("-d"),
+        String::from("-s"),
+        String::from(tmux_session_name),
+        String::from("-c"),
+        String::from(tmux_session_path),
+    ];
+    for (key, value) in env {
+        args.push(String::from("-e"));
+        args.push(format!("{key}={value}"));
+    }
+    args
+}
+
+// `-l` sends the text literally, so words like `Enter` aren't read as key names
+fn send_keys_args(tmux_session_name: &str, text: &str) -> Vec<String> {
+    vec![
+        String::from("send-keys"),
+        String::from("-t"),
+        exact_pane_target(tmux_session_name),
+        String::from("-l"),
+        String::from(text),
+    ]
+}
+
+fn send_enter_args(tmux_session_name: &str) -> Vec<String> {
+    vec![
+        String::from("send-keys"),
+        String::from("-t"),
+        exact_pane_target(tmux_session_name),
+        String::from("Enter"),
+    ]
+}
+
 fn kill_session_args(tmux_session_name: &str) -> Vec<String> {
     vec![
         String::from("kill-session"),
@@ -78,22 +123,38 @@ pub fn fetch_tmux_sessions() -> color_eyre::Result<Vec<String>> {
     Ok(sessions)
 }
 
+/// Creates a detached session, with `env` set in the environment of its shells
 pub fn new_tmux_session(
     tmux_session_name: String,
     tmux_session_path: String,
+    env: &[(String, String)],
 ) -> color_eyre::Result<()> {
-    let mut cmd = std::process::Command::new("tmux");
-    cmd.args([
-        "new-session",
-        "-d",
-        "-s",
-        &tmux_session_name,
-        "-c",
-        &tmux_session_path,
-    ]);
-    let status = cmd.status()?;
+    let status = std::process::Command::new("tmux")
+        .args(new_session_args(
+            &tmux_session_name,
+            &tmux_session_path,
+            env,
+        ))
+        .status()?;
     if !status.success() {
         return Err(color_eyre::eyre::eyre!("tmux new-session failed"));
+    }
+    Ok(())
+}
+
+/// Types `command` into the session's active pane and presses Enter
+pub fn run_in_tmux_session(tmux_session_name: &str, command: &str) -> color_eyre::Result<()> {
+    for args in [
+        send_keys_args(tmux_session_name, command),
+        send_enter_args(tmux_session_name),
+    ] {
+        let status = std::process::Command::new("tmux")
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(color_eyre::eyre::eyre!("tmux send-keys failed"));
+        }
     }
     Ok(())
 }
@@ -140,11 +201,12 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        project::Project,
+        project::{Hooks, Project},
         session::Session,
         tmux::{
-            attach_session_args, exact_target, get_tmux_session_name, get_tmux_session_path,
-            kill_session_args, rename_session_args,
+            attach_session_args, exact_pane_target, exact_target, get_tmux_session_name,
+            get_tmux_session_path, kill_session_args, new_session_args, rename_session_args,
+            send_enter_args, send_keys_args,
         },
         worktree::Worktree,
     };
@@ -155,6 +217,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("project-name"),
             path: String::new(),
+            hooks: Hooks::default(),
             worktrees: vec![],
         };
         let session = Session {
@@ -186,6 +249,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::new(),
             path: String::from("/project-path"),
+            hooks: Hooks::default(),
             worktrees: vec![],
         };
         let mut session = Session {
@@ -258,6 +322,53 @@ mod tests {
         assert_eq!(
             attach_session_args("api", true),
             ["switch-client", "-t", "=api"]
+        );
+    }
+    #[test]
+    fn test_exact_pane_target_ends_with_colon() {
+        assert_eq!(exact_pane_target("api"), "=api:");
+    }
+    #[test]
+    fn test_new_session_args() {
+        assert_eq!(
+            new_session_args("api", "/src/api", &[]),
+            ["new-session", "-d", "-s", "api", "-c", "/src/api"]
+        );
+    }
+    #[test]
+    fn test_new_session_args_with_env() {
+        let env = [
+            (String::from("A"), String::from("1")),
+            (String::from("B"), String::from("x=y z")),
+        ];
+        assert_eq!(
+            new_session_args("api", "/src/api", &env),
+            [
+                "new-session",
+                "-d",
+                "-s",
+                "api",
+                "-c",
+                "/src/api",
+                "-e",
+                "A=1",
+                "-e",
+                "B=x=y z"
+            ]
+        );
+    }
+    #[test]
+    fn test_send_keys_args_sends_text_literally() {
+        assert_eq!(
+            send_keys_args("api", "make setup; echo Enter"),
+            ["send-keys", "-t", "=api:", "-l", "make setup; echo Enter"]
+        );
+    }
+    #[test]
+    fn test_send_enter_args() {
+        assert_eq!(
+            send_enter_args("api"),
+            ["send-keys", "-t", "=api:", "Enter"]
         );
     }
 }

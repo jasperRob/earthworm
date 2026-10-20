@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::Style,
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Clear, Paragraph},
 };
@@ -142,6 +142,14 @@ impl Form {
 
     fn match_standard_input_key(&mut self, key: KeyEvent) -> FormEvent {
         match key.code {
+            KeyCode::Char(' ' | 'l') | KeyCode::Right if self.focused_is_choice() => {
+                self.cycle_choice(true);
+                FormEvent::Continue
+            }
+            KeyCode::Char('h') | KeyCode::Left if self.focused_is_choice() => {
+                self.cycle_choice(false);
+                FormEvent::Continue
+            }
             KeyCode::Tab | KeyCode::Down => {
                 let n = self.form_input_states.len();
                 let mut next = self.focused + 1;
@@ -169,7 +177,7 @@ impl Form {
                 if state.form_input.readonly {
                     return FormEvent::Continue;
                 }
-                if state.form_input.is_text() || state.form_input.is_path() {
+                if state.form_input.is_text() {
                     let byte_idx = state
                         .value
                         .char_indices()
@@ -281,14 +289,14 @@ impl Form {
             }
         }
 
-        frame.set_cursor_position((
-            active_area.x
-                + 1
-                + active_label.len() as u16
-                + 2
-                + self.form_input_states[self.focused].cursor_position as u16,
-            active_area.y,
-        ));
+        // A choice input has no cursor, and the cursor is hidden for frames that don't set it
+        let focused = &self.form_input_states[self.focused];
+        if !focused.form_input.is_choice() {
+            frame.set_cursor_position((
+                active_area.x + 1 + active_label.len() as u16 + 2 + focused.cursor_position as u16,
+                active_area.y,
+            ));
+        }
     }
 
     fn labeled_input(&self, state: &FormInputState, is_focused: bool) -> Paragraph<'_> {
@@ -301,14 +309,31 @@ impl Form {
         } else {
             Style::default()
         };
-        Paragraph::new(Line::from(vec![
-            Span::styled(format!(" {}: ", state.form_input.label), label_style),
-            Span::raw(state.value.clone()),
-            Span::styled(
-                state.suggested_path.clone().unwrap_or(String::from("")),
-                Style::default().fg(ratatui::style::Color::DarkGray),
-            ),
-        ]))
+        let mut spans = vec![Span::styled(
+            format!(" {}: ", state.form_input.label),
+            label_style,
+        )];
+        if state.form_input.is_choice() {
+            // Every choice is listed, so it's clear what the input can switch to
+            for choice in &state.form_input.choices {
+                let style = if *choice == state.value {
+                    Style::default()
+                        .fg(SECONDARY)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                spans.push(Span::styled(choice.clone(), style));
+                spans.push(Span::raw("  "));
+            }
+        } else {
+            spans.push(Span::raw(state.value.clone()));
+            spans.push(Span::styled(
+                state.suggested_path.clone().unwrap_or_default(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        Paragraph::new(Line::from(spans))
     }
 
     fn draw_confirmation_form(&self, frame: &mut Frame, area: Rect) {
@@ -349,6 +374,25 @@ impl Form {
 
     fn first_invalid_input(&self) -> Option<usize> {
         self.form_input_states.iter().position(|s| !s.is_valid)
+    }
+
+    fn focused_is_choice(&self) -> bool {
+        let input = &self.form_input_states[self.focused].form_input;
+        input.is_choice() && !input.readonly
+    }
+
+    /// Moves the focused choice input to its next or previous choice, wrapping around. A value
+    /// that isn't one of the choices moves to the first.
+    fn cycle_choice(&mut self, forward: bool) {
+        let state = &mut self.form_input_states[self.focused];
+        let choices = &state.form_input.choices;
+        let n = choices.len();
+        let next = match choices.iter().position(|c| *c == state.value) {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None => 0,
+        };
+        state.value = choices[next].clone();
     }
 
     // TODO: These should take a form input state as a param. The use of self should be separated
@@ -481,8 +525,7 @@ mod tests {
 
     #[test]
     fn test_type_char_at_string_end() {
-        // TODO: .required() is necessary to set a text input validation. Fix that later.
-        let mut form: Form = Form::standard().inputs(vec![FormInput::new().required()]);
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new()]);
         form.match_standard_input_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
         assert_eq!(form.form_input_states[0].value, "a");
         assert_eq!(form.form_input_states[0].cursor_position, 1);
@@ -886,5 +929,88 @@ mod tests {
                 .required(),
         ]);
         assert_eq!(form.value(0), "./foo");
+    }
+
+    fn choice_form(initial: &str) -> Form {
+        Form::standard().inputs(vec![
+            FormInput::new()
+                .choice(["a", "b", "c"])
+                .initial_value(String::from(initial)),
+        ])
+    }
+
+    fn press(form: &mut Form, code: KeyCode) {
+        form.match_standard_input_key(KeyEvent::new(code, KeyModifiers::empty()));
+    }
+
+    #[test]
+    fn test_choice_moves_forward_and_wraps() {
+        let mut form = choice_form("b");
+        press(&mut form, KeyCode::Char(' '));
+        assert_eq!(form.value(0), "c");
+        press(&mut form, KeyCode::Right);
+        assert_eq!(form.value(0), "a");
+        press(&mut form, KeyCode::Char('l'));
+        assert_eq!(form.value(0), "b");
+    }
+
+    #[test]
+    fn test_choice_moves_back_and_wraps() {
+        let mut form = choice_form("b");
+        press(&mut form, KeyCode::Left);
+        assert_eq!(form.value(0), "a");
+        press(&mut form, KeyCode::Char('h'));
+        assert_eq!(form.value(0), "c");
+    }
+
+    #[test]
+    fn test_choice_is_not_typed_into() {
+        let mut form = choice_form("a");
+        press(&mut form, KeyCode::Char('x'));
+        press(&mut form, KeyCode::Backspace);
+        assert_eq!(form.value(0), "a");
+    }
+
+    #[test]
+    fn test_readonly_choice_does_not_change() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new()
+                .choice(["a", "b"])
+                .initial_value(String::from("a"))
+                .readonly(),
+        ]);
+        press(&mut form, KeyCode::Char(' '));
+        press(&mut form, KeyCode::Left);
+        assert_eq!(form.value(0), "a");
+    }
+
+    #[test]
+    fn test_choice_keys_still_edit_text_inputs() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new()]);
+        press(&mut form, KeyCode::Char('h'));
+        press(&mut form, KeyCode::Char(' '));
+        press(&mut form, KeyCode::Char('l'));
+        assert_eq!(form.value(0), "h l");
+    }
+
+    #[test]
+    fn test_enter_with_invalid_choice_focuses_it_until_changed() {
+        let mut form: Form = Form::standard().inputs(vec![
+            FormInput::new().initial_value(String::from("text")),
+            FormInput::new()
+                .choice(["a", "b"])
+                .initial_value(String::from("x")),
+        ]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Continue));
+        assert_eq!(form.focused, 1);
+        press(&mut form, KeyCode::Char(' '));
+        assert_eq!(form.value(1), "a");
+        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
+    }
+
+    #[test]
+    fn test_enter_with_empty_optional_input_submits() {
+        let mut form: Form = Form::standard().inputs(vec![FormInput::new()]);
+        assert!(matches!(press_enter(&mut form), FormEvent::Submit));
     }
 }

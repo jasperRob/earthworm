@@ -73,7 +73,11 @@ mod tests {
         worktree::remove_worktree,
         *,
     };
-    use crate::{project::Project, session::Session, worktree::Worktree};
+    use crate::{
+        project::{Hooks, Project, SetupMode},
+        session::Session,
+        worktree::Worktree,
+    };
 
     fn press(popup: &mut dyn Popup, code: KeyCode) -> PopupOutcome {
         popup.handle_key(KeyEvent::new(code, KeyModifiers::empty()))
@@ -107,6 +111,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from(path),
+            hooks: Hooks::default(),
             worktrees: vec![],
         }
     }
@@ -145,8 +150,63 @@ mod tests {
                 id: project.id,
                 name: String::from("repo"),
                 path,
+                hooks: Hooks::default(),
                 worktrees: vec![],
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_project_submits_hooks() {
+        let (_dir, path) = temp_dir();
+        let mut popup = new_project();
+        type_text(&mut popup, "repo");
+        press(&mut popup, KeyCode::Tab);
+        type_text(&mut popup, &path);
+        press(&mut popup, KeyCode::Tab);
+        type_text(&mut popup, " make setup ");
+        press(&mut popup, KeyCode::Tab);
+        press(&mut popup, KeyCode::Char(' '));
+        press(&mut popup, KeyCode::Tab);
+        type_text(&mut popup, "make clean");
+        let Action::SubmitProject(project) = submit(&mut popup, KeyCode::Enter) else {
+            panic!("expected SubmitProject");
+        };
+        assert_eq!(
+            project.hooks,
+            Hooks {
+                setup: Some(String::from("make setup")),
+                setup_mode: SetupMode::Background,
+                teardown: Some(String::from("make clean")),
+            }
+        );
+    }
+
+    #[test]
+    fn test_edit_project_clears_emptied_hooks() {
+        let (_dir, path) = temp_dir();
+        let project = Project {
+            hooks: Hooks {
+                setup: Some(String::from("x")),
+                setup_mode: SetupMode::Background,
+                teardown: Some(String::from("y")),
+            },
+            ..project(&path)
+        };
+        let mut popup = edit_project(project.clone());
+        press(&mut popup, KeyCode::Tab);
+        press(&mut popup, KeyCode::Tab);
+        press(&mut popup, KeyCode::Backspace);
+        press(&mut popup, KeyCode::Tab);
+        press(&mut popup, KeyCode::Left);
+        press(&mut popup, KeyCode::Tab);
+        press(&mut popup, KeyCode::Backspace);
+        assert_eq!(
+            submit(&mut popup, KeyCode::Enter),
+            Action::UpdateProject(Project {
+                hooks: Hooks::default(),
+                ..project
+            })
         );
     }
 

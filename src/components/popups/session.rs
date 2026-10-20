@@ -153,12 +153,14 @@ mod tests {
 
     use super::*;
     use crate::components::popups::{Popup, PopupOutcome};
+    use crate::project::Hooks;
 
     fn submit_name(project_path: &str, name: &str) -> Session {
         let project = Project {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from(project_path),
+            hooks: Hooks::default(),
             worktrees: vec![],
         };
         let mut popup = new_session_in_project(&project);
@@ -214,6 +216,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: String::from("repo"),
             path: String::from("/src/repo"),
+            hooks: Hooks::default(),
             worktrees: vec![],
         };
         let mut popup = new_session_in_project(&project);

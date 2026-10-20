@@ -4,23 +4,15 @@ use std::{
 };
 
 #[derive(Clone)]
-enum TextRule {
-    NonEmpty,
-    // OneOf(Vec<String>),
-}
-
-#[derive(Clone)]
 enum InputValidation {
-    Text(TextRule),
+    NonEmpty,
     Path,
 }
 
 impl InputValidation {
     fn is_satisfied_by(&self, value: &str) -> bool {
         match self {
-            InputValidation::Text(rule) => match rule {
-                TextRule::NonEmpty => !value.is_empty(),
-            },
+            InputValidation::NonEmpty => !value.is_empty(),
             // A single stat; cheap enough to run on every draw
             InputValidation::Path => !value.is_empty() && normalise_path(value).is_dir(),
         }
@@ -33,6 +25,8 @@ pub struct FormInput {
     pub initial_value: String,
     input_validations: Vec<InputValidation>,
     pub readonly: bool,
+    /// Values a choice input switches between; empty for a text input
+    pub choices: Vec<String>,
 }
 
 impl FormInput {
@@ -42,6 +36,7 @@ impl FormInput {
             initial_value: String::default(),
             input_validations: Vec::default(),
             readonly: false,
+            choices: Vec::default(),
         }
     }
 
@@ -56,8 +51,7 @@ impl FormInput {
     }
 
     pub fn required(mut self) -> Self {
-        self.input_validations
-            .push(InputValidation::Text(TextRule::NonEmpty));
+        self.input_validations.push(InputValidation::NonEmpty);
         self
     }
 
@@ -71,10 +65,14 @@ impl FormInput {
         self
     }
 
+    /// Makes this a choice input, switched between `choices` instead of typed into
+    pub fn choice<S: Into<String>>(mut self, choices: impl IntoIterator<Item = S>) -> Self {
+        self.choices = choices.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn is_text(&self) -> bool {
-        self.input_validations
-            .iter()
-            .any(|v| matches!(v, InputValidation::Text(_) | InputValidation::Path))
+        !self.is_choice()
     }
 
     pub fn is_path(&self) -> bool {
@@ -83,10 +81,16 @@ impl FormInput {
             .any(|v| matches!(v, InputValidation::Path))
     }
 
+    pub fn is_choice(&self) -> bool {
+        !self.choices.is_empty()
+    }
+
     pub fn is_valid(&self, value: &str) -> bool {
-        self.input_validations
-            .iter()
-            .all(|v| v.is_satisfied_by(value))
+        (!self.is_choice() || self.choices.iter().any(|c| c == value))
+            && self
+                .input_validations
+                .iter()
+                .all(|v| v.is_satisfied_by(value))
     }
 }
 
@@ -135,6 +139,25 @@ mod tests {
     fn test_validate_required_input() {
         let form_input: FormInput = FormInput::new().required();
         assert!(form_input.is_valid("hello world"));
+        assert!(!form_input.is_valid(""));
+    }
+
+    #[test]
+    fn test_validate_optional_input() {
+        let form_input: FormInput = FormInput::new();
+        assert!(form_input.is_text());
+        assert!(form_input.is_valid(""));
+        assert!(form_input.is_valid("hello world"));
+    }
+
+    #[test]
+    fn test_validate_choice_input() {
+        let form_input: FormInput = FormInput::new().choice(["a", "b"]);
+        assert!(form_input.is_choice());
+        assert!(!form_input.is_text());
+        assert!(form_input.is_valid("a"));
+        assert!(form_input.is_valid("b"));
+        assert!(!form_input.is_valid("c"));
         assert!(!form_input.is_valid(""));
     }
 
