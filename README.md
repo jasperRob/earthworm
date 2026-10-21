@@ -95,6 +95,42 @@ Deleting a **session** only kills the tmux session, and its worktree is kept.
 Deleting a **worktree** runs `git worktree remove`, which refuses if the
 worktree has changes or untracked files.
 
+### Setup and teardown scripts
+
+A project can have a **setup** script, run when one of its sessions is created,
+and a **teardown** script, run when one is deleted. Set them with `Space p` or
+`Space e` on the project. Each is a shell command, such as `./scripts/setup.sh`
+or `npm install && cp ../api/.env .`, and runs in the session's directory.
+
+**Setup mode** chooses where setup runs. Press `Space` or `←`/`→` to change it:
+
+- `pane` (default): the script is typed into the new session's shell, so you can
+  watch it and it can prompt you. The session can be attached straight away.
+- `background`: the script runs before the tmux session is created, with its
+  output hidden.
+
+Teardown always runs in the background, before the tmux session is killed. It
+also runs for each session when a project is deleted, but not for sessions
+killed outside earthworm.
+
+A background script that fails, or runs for more than 5 minutes, is reported as
+an error, and the session is still created or deleted. Its full output is
+written to `earthworm.log` in the [data directory](#configuration).
+
+Scripts can read these environment variables:
+
+| Variable                 | Value                                         |
+| ------------------------ | --------------------------------------------- |
+| `EARTHWORM_PROJECT_NAME` | Project name                                  |
+| `EARTHWORM_PROJECT_PATH` | Project repo path                             |
+| `EARTHWORM_SESSION_NAME` | Session name                                  |
+| `EARTHWORM_SESSION_PATH` | Session directory, where the script runs      |
+| `EARTHWORM_TMUX_SESSION` | Session name in tmux                          |
+| `EARTHWORM_BRANCH`       | Worktree branch, if the session has one       |
+
+In `pane` mode they are set for the whole tmux session, so every window in it
+has them.
+
 ## Keybindings
 
 **Navigation**

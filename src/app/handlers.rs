@@ -10,12 +10,13 @@ use super::App;
 use crate::{
     action::{Action, JobCompletion, TmuxSnapshot},
     git::{create_worktree, fetch_worktrees, remove_worktree},
+    hooks::{Hook, SCRIPT_TIMEOUT},
     pending::{Activity, JobId, Pending, PendingTarget},
-    project::Project,
+    project::{Project, SetupMode},
     session::Session,
     tmux::{
         attach_tmux_session, fetch_tmux_sessions, get_tmux_session_name, get_tmux_session_path,
-        kill_tmux_session, new_tmux_session, rename_tmux_session,
+        kill_tmux_session, new_tmux_session, rename_tmux_session, run_in_tmux_session,
     },
     worktree::Worktree,
 };
@@ -87,16 +88,27 @@ impl App {
 
     pub(super) fn on_remove_project(&mut self, project: &Project) -> Result<()> {
         let project_id = project.id;
-        let tmux_session_names: Vec<String> = self
+        let project_sessions: Vec<&Session> = self
             .sessions
             .values()
             .filter(|s| s.project_id == Some(project_id))
+            .collect();
+        let tmux_session_names: Vec<String> = project_sessions
+            .iter()
             .map(|s| get_tmux_session_name(s, Some(project)))
             .collect();
+        let teardowns: Vec<Hook> = project_sessions
+            .iter()
+            .filter_map(|s| Hook::for_session(project.hooks.teardown.as_deref(), s, project))
+            .collect();
+        let error_tx = self.action_tx.clone();
 
         self.spawn_tracked_job(
             Pending::new(PendingTarget::Project(project_id), Activity::Removing),
             move || {
+                for hook in teardowns {
+                    run_hook("Teardown", &hook, &error_tx);
+                }
                 let errors: Vec<String> = tmux_session_names
                     .into_iter()
                     .filter_map(|name| {
@@ -146,6 +158,10 @@ impl App {
             .filter(|p| session.worktree.is_some() && !p.path.is_empty())
             .map(|p| p.path.clone());
 
+        let setup = project.and_then(|p| {
+            Hook::for_session(p.hooks.setup.as_deref(), session, p)
+                .map(|hook| (p.hooks.setup_mode, hook))
+        });
         let tmux_session_name = get_tmux_session_name(session, project);
         let tmux_session_path = get_tmux_session_path(session, project)?;
         let session = session.clone();
@@ -157,8 +173,28 @@ impl App {
                 if let Some((repo_path, name, path)) = new_worktree {
                     create_worktree(&repo_path, &name, &path)?;
                 }
+                let pane_setup = match setup {
+                    Some((SetupMode::Background, hook)) => {
+                        run_hook("Setup", &hook, &error_tx);
+                        None
+                    }
+                    Some((SetupMode::Pane, hook)) => Some(hook),
+                    None => None,
+                };
                 // Failure to create the tmux session leaves the worktree intact
-                new_tmux_session(tmux_session_name, tmux_session_path)?;
+                new_tmux_session(
+                    tmux_session_name.clone(),
+                    tmux_session_path,
+                    pane_setup.as_ref().map_or(&[], |hook| hook.env.as_slice()),
+                )?;
+                if let Some(hook) = pane_setup
+                    && let Err(e) = run_in_tmux_session(&tmux_session_name, &hook.script)
+                {
+                    // The session exists, so it is kept for the script to be run by hand
+                    let _ = error_tx.send(Action::Error(format!(
+                        "Could not start setup script in {tmux_session_name}: {e}"
+                    )));
+                }
                 Ok(refresh_repo_path.and_then(|p| refresh_worktrees(&p, &error_tx)))
             },
             move |result| JobCompletion::SessionCreation { session, result },
@@ -223,10 +259,18 @@ impl App {
     pub(super) fn on_remove_session(&mut self, session: &Session) -> Result<()> {
         let project = self.get_session_project(session)?;
         let tmux_session_name = get_tmux_session_name(session, project);
+        let teardown =
+            project.and_then(|p| Hook::for_session(p.hooks.teardown.as_deref(), session, p));
         let session = session.clone();
+        let error_tx = self.action_tx.clone();
         self.spawn_tracked_job(
             Pending::new(PendingTarget::Session(session.id), Activity::Removing),
-            move || kill_tmux_session(tmux_session_name),
+            move || {
+                if let Some(hook) = teardown {
+                    run_hook("Teardown", &hook, &error_tx);
+                }
+                kill_tmux_session(tmux_session_name)
+            },
             move |result| JobCompletion::SessionRemoval { session, result },
         )
     }
@@ -352,6 +396,17 @@ fn refresh_worktrees(repo_path: &str, error_tx: &UnboundedSender<Action>) -> Opt
             let _ = error_tx.send(Action::Error(e.to_string()));
         })
         .ok()
+}
+
+/// Runs a setup or teardown script in the background. A failure is reported as an error, without
+/// failing the surrounding job, so the session is still created or removed.
+fn run_hook(kind: &str, hook: &Hook, error_tx: &UnboundedSender<Action>) {
+    if let Err(e) = hook.run(SCRIPT_TIMEOUT) {
+        let _ = error_tx.send(Action::Error(format!(
+            "{kind} script for {} failed: {e}",
+            hook.tmux_session_name
+        )));
+    }
 }
 
 /// A finished job's result, with its error message converted into a propagatable error
@@ -552,13 +607,18 @@ mod tests {
         apply_project_change, apply_project_removal, apply_project_update, apply_session_creation,
         apply_session_removal, apply_session_update, apply_tmux_sync, apply_worktree_removal,
     };
-    use crate::{project::Project, session::Session, worktree::Worktree};
+    use crate::{
+        project::{Hooks, Project},
+        session::Session,
+        worktree::Worktree,
+    };
 
     fn project() -> Project {
         Project {
             id: Uuid::new_v4(),
             name: String::from("project"),
             path: String::from("/repo"),
+            hooks: Hooks::default(),
             worktrees: vec![worktree("old")],
         }
     }

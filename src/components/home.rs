@@ -971,7 +971,7 @@ mod tests {
         components::{Component, popups::PopupState},
         config::Config,
         pending::{Activity, Pending, PendingTarget},
-        project::Project,
+        project::{Hooks, Project},
         session::Session,
         worktree::Worktree,
     };
@@ -981,6 +981,7 @@ mod tests {
             id: Uuid::new_v4(),
             name: "project".to_string(),
             path: String::new(),
+            hooks: Hooks::default(),
             worktrees: Vec::new(),
         }
     }

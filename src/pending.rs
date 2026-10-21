@@ -96,13 +96,17 @@ mod tests {
     use uuid::Uuid;
 
     use super::{Activity, Pending, PendingTarget, apply_placeholders};
-    use crate::{project::Project, session::Session};
+    use crate::{
+        project::{Hooks, Project},
+        session::Session,
+    };
 
     fn project() -> Project {
         Project {
             id: Uuid::new_v4(),
             name: "project".to_string(),
             path: String::new(),
+            hooks: Hooks::default(),
             worktrees: Vec::new(),
         }
     }

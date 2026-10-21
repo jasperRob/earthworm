@@ -10,6 +10,7 @@ mod components;
 mod config;
 mod errors;
 mod git;
+mod hooks;
 mod logging;
 mod pending;
 mod project;
