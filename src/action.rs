@@ -63,6 +63,37 @@ pub enum Action {
     StateUpdated(HashMap<Uuid, Project>, HashMap<Uuid, Session>, Vec<Pending>),
 }
 
+impl Action {
+    /// What a command bound to a key does, in words, or None for actions only raised internally
+    pub fn description(&self) -> Option<&'static str> {
+        Some(match self {
+            Action::Quit => "Quit",
+            Action::Suspend => "Suspend",
+            Action::Help => "Show this help",
+            Action::CmdSelectNext => "Move down",
+            Action::CmdSelectPrev => "Move up",
+            Action::CmdJumpTop => "Jump to top",
+            Action::CmdJumpBottom => "Jump to bottom",
+            Action::CmdStartSearch => "Search",
+            Action::CmdSearchNext => "Next match",
+            Action::CmdSearchPrev => "Previous match",
+            Action::CmdAddProject => "New project",
+            Action::CmdAddSession => "New session",
+            Action::CmdAddSessionInProject => "New session in project",
+            Action::CmdDeleteItem => "Delete",
+            Action::CmdAttach => "Attach to session",
+            Action::CmdEdit => "Edit",
+            Action::CmdActivate => "Attach, or collapse/expand project",
+            Action::CmdCollapse => "Collapse project",
+            Action::CmdExpand => "Expand project",
+            Action::CmdToggleCollapse => "Toggle collapse",
+            Action::CmdNextSessionHistory => "Next session in history",
+            Action::CmdPrevSessionHistory => "Previous session in history",
+            _ => return None,
+        })
+    }
+}
+
 /// Outcome of a background job, carrying what is needed to apply its result
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobCompletion {

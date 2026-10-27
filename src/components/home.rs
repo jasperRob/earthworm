@@ -17,7 +17,7 @@ use crate::{
         },
         worktree::remove_worktree,
     },
-    config::key_event_to_string,
+    config::{compact_key_sequence, key_event_to_string},
     pending::{Activity, PendingTarget, apply_placeholders},
     project::Project,
     session::Session,
@@ -406,19 +406,7 @@ impl Home {
             .filter(|(_, bound)| *bound == action)
             .map(|(keys, _)| keys)
             .min_by_key(|keys| (keys.len(), *keys))
-            .map(|keys| {
-                keys.split(' ')
-                    .map(|key| match key {
-                        "space" => "␣",
-                        "enter" => "⏎",
-                        // A shifted letter is already written in uppercase
-                        key => key
-                            .strip_prefix("shift-")
-                            .filter(|letter| letter.chars().count() == 1)
-                            .unwrap_or(key),
-                    })
-                    .collect()
-            })
+            .map(|keys| compact_key_sequence(keys))
     }
 
     /// Hints for the selected row's actions, leaving out those that don't fit in `width`, though
@@ -644,7 +632,13 @@ impl Component for Home {
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
         match action {
             Action::Help => {
-                self.popup_state = PopupState::Open(Box::new(HelpPopup::new(self.keymaps.clone())))
+                let applicable = self
+                    .footer_actions()
+                    .into_iter()
+                    .map(|(action, _)| action)
+                    .collect();
+                self.popup_state =
+                    PopupState::Open(Box::new(HelpPopup::new(self.keymaps.clone(), applicable)))
             }
             Action::StateUpdated(mut projects, mut sessions, pending) => {
                 apply_placeholders(&mut projects, &mut sessions, &pending);

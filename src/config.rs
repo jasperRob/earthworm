@@ -271,6 +271,21 @@ pub fn key_event_to_string(key_event: &KeyEvent) -> String {
     key
 }
 
+/// A space-separated key sequence, as written by `key_event_to_string`, written compactly
+pub fn compact_key_sequence(keys: &str) -> String {
+    keys.split(' ')
+        .map(|key| match key {
+            "space" => "␣",
+            "enter" => "⏎",
+            // A shifted letter is already written in uppercase
+            key => key
+                .strip_prefix("shift-")
+                .filter(|letter| letter.chars().count() == 1)
+                .unwrap_or(key),
+        })
+        .collect()
+}
+
 pub fn parse_key_sequence(raw: &str) -> color_eyre::Result<Vec<KeyEvent>, String> {
     if raw.chars().filter(|c| *c == '>').count() != raw.chars().filter(|c| *c == '<').count() {
         return Err(format!("Unable to parse `{}`", raw));
